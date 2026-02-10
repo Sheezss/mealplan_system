@@ -14,76 +14,15 @@ $user_name = $_SESSION['full_name'];
 // Handle form submission
 $message = '';
 $message_type = '';
+$saved_successfully = false;
 
-// Check if preferences table exists, if not create it
-$check_table = "SHOW TABLES LIKE 'user_preferences'";
-$table_exists = mysqli_query($conn, $check_table);
-
-if (mysqli_num_rows($table_exists) == 0) {
-    // Create user_preferences table
-    $create_table = "CREATE TABLE user_preferences (
-        pref_id INT AUTO_INCREMENT PRIMARY KEY,
-        user_id INT UNIQUE,
-        diet_type VARCHAR(50) DEFAULT 'Balanced',
-        cuisine_pref VARCHAR(100) DEFAULT 'Kenyan',
-        spicy_level VARCHAR(20) DEFAULT 'Medium',
-        cooking_time VARCHAR(50) DEFAULT '30-45 minutes',
-        meals_per_day INT DEFAULT 3,
-        avoid_pork TINYINT(1) DEFAULT 0,
-        avoid_beef TINYINT(1) DEFAULT 0,
-        avoid_fish TINYINT(1) DEFAULT 0,
-        avoid_dairy TINYINT(1) DEFAULT 0,
-        avoid_gluten TINYINT(1) DEFAULT 0,
-        avoid_nuts TINYINT(1) DEFAULT 0,
-        avoid_eggs TINYINT(1) DEFAULT 0,
-        vegetarian TINYINT(1) DEFAULT 0,
-        vegan TINYINT(1) DEFAULT 0,
-        low_carb TINYINT(1) DEFAULT 0,
-        low_fat TINYINT(1) DEFAULT 0,
-        low_sodium TINYINT(1) DEFAULT 0,
-        sugar_free TINYINT(1) DEFAULT 0,
-        high_protein TINYINT(1) DEFAULT 0,
-        diabetic TINYINT(1) DEFAULT 0,
-        hypertension TINYINT(1) DEFAULT 0,
-        cholesterol TINYINT(1) DEFAULT 0,
-        pregnancy TINYINT(1) DEFAULT 0,
-        lactose TINYINT(1) DEFAULT 0,
-        pref_breakfast TINYINT(1) DEFAULT 1,
-        pref_lunch TINYINT(1) DEFAULT 1,
-        pref_dinner TINYINT(1) DEFAULT 1,
-        pref_snacks TINYINT(1) DEFAULT 0,
-        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-        FOREIGN KEY (user_id) REFERENCES users(user_id) ON DELETE CASCADE
-    )";
-    
-    mysqli_query($conn, $create_table);
-} else {
-    // Check and add missing columns if table exists but is outdated
-    $columns_to_add = [
-        'avoid_gluten' => "ALTER TABLE user_preferences ADD COLUMN avoid_gluten TINYINT(1) DEFAULT 0",
-        'avoid_nuts' => "ALTER TABLE user_preferences ADD COLUMN avoid_nuts TINYINT(1) DEFAULT 0",
-        'avoid_eggs' => "ALTER TABLE user_preferences ADD COLUMN avoid_eggs TINYINT(1) DEFAULT 0",
-        'low_sodium' => "ALTER TABLE user_preferences ADD COLUMN low_sodium TINYINT(1) DEFAULT 0",
-        'sugar_free' => "ALTER TABLE user_preferences ADD COLUMN sugar_free TINYINT(1) DEFAULT 0",
-        'diabetic' => "ALTER TABLE user_preferences ADD COLUMN diabetic TINYINT(1) DEFAULT 0",
-        'hypertension' => "ALTER TABLE user_preferences ADD COLUMN hypertension TINYINT(1) DEFAULT 0",
-        'cholesterol' => "ALTER TABLE user_preferences ADD COLUMN cholesterol TINYINT(1) DEFAULT 0",
-        'pregnancy' => "ALTER TABLE user_preferences ADD COLUMN pregnancy TINYINT(1) DEFAULT 0",
-        'lactose' => "ALTER TABLE user_preferences ADD COLUMN lactose TINYINT(1) DEFAULT 0",
-        'pref_breakfast' => "ALTER TABLE user_preferences ADD COLUMN pref_breakfast TINYINT(1) DEFAULT 1",
-        'pref_lunch' => "ALTER TABLE user_preferences ADD COLUMN pref_lunch TINYINT(1) DEFAULT 1",
-        'pref_dinner' => "ALTER TABLE user_preferences ADD COLUMN pref_dinner TINYINT(1) DEFAULT 1",
-        'pref_snacks' => "ALTER TABLE user_preferences ADD COLUMN pref_snacks TINYINT(1) DEFAULT 0"
-    ];
-    
-    foreach ($columns_to_add as $column_name => $alter_sql) {
-        $check_column = "SHOW COLUMNS FROM user_preferences LIKE '$column_name'";
-        $column_exists = mysqli_query($conn, $check_column);
-        
-        if (mysqli_num_rows($column_exists) == 0) {
-            mysqli_query($conn, $alter_sql);
-        }
-    }
+// Get pantry count for workflow
+$pantry_count_query = "SELECT COUNT(*) as count FROM pantry WHERE user_id = $user_id";
+$pantry_count_result = mysqli_query($conn, $pantry_count_query);
+$pantry_count = 0;
+if ($pantry_count_result) {
+    $pantry_data = mysqli_fetch_assoc($pantry_count_result);
+    $pantry_count = $pantry_data['count'] ?? 0;
 }
 
 // Get existing preferences if they exist
@@ -96,11 +35,11 @@ if (mysqli_num_rows($pref_result) > 0) {
 
 // Save preferences
 if (isset($_POST['save_preferences'])) {
-    $diet_type = mysqli_real_escape_string($conn, $_POST['diet_type']);
-    $cuisine_pref = mysqli_real_escape_string($conn, $_POST['cuisine_pref']);
-    $spicy_level = mysqli_real_escape_string($conn, $_POST['spicy_level']);
-    $cooking_time = mysqli_real_escape_string($conn, $_POST['cooking_time']);
-    $meals_per_day = intval($_POST['meals_per_day']);
+    $diet_type = mysqli_real_escape_string($conn, $_POST['diet_type'] ?? 'Balanced');
+    $cuisine_pref = mysqli_real_escape_string($conn, $_POST['cuisine_pref'] ?? 'Kenyan');
+    $spicy_level = mysqli_real_escape_string($conn, $_POST['spicy_level'] ?? 'Medium');
+    $cooking_time = mysqli_real_escape_string($conn, $_POST['cooking_time'] ?? '30-45 minutes');
+    $meals_per_day = intval($_POST['meals_per_day'] ?? 3);
     
     // Dietary restrictions
     $avoid_pork = isset($_POST['avoid_pork']) ? 1 : 0;
@@ -185,22 +124,24 @@ if (isset($_POST['save_preferences'])) {
     }
     
     if (mysqli_query($conn, $sql)) {
-        $message = "Preferences saved successfully!";
+        $message = "Preferences saved successfully! Your meal plans will now be personalized based on these preferences.";
         $message_type = 'success';
+        $saved_successfully = true;
         
         // Refresh preferences
         $pref_result = mysqli_query($conn, $pref_query);
         $preferences = mysqli_fetch_assoc($pref_result);
+        
+        // Add activity log
+        $activity_details = "Updated dietary preferences: $diet_type diet, $meals_per_day meals/day";
+        $activity_query = "INSERT INTO user_activity (user_id, activity_type, activity_details) 
+                           VALUES ($user_id, 'preferences_updated', '$activity_details')";
+        mysqli_query($conn, $activity_query);
     } else {
         $message = "Error saving preferences: " . mysqli_error($conn);
         $message_type = 'error';
     }
 }
-
-// Get pantry count for workflow
-$pantry_count_query = "SELECT COUNT(*) as count FROM pantry WHERE user_id = $user_id";
-$pantry_count_result = mysqli_query($conn, $pantry_count_query);
-$pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
 ?>
 
 <!DOCTYPE html>
@@ -489,6 +430,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             padding: 15px;
             cursor: pointer;
             transition: all 0.3s;
+            position: relative;
         }
         
         .pref-option:hover {
@@ -533,7 +475,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             accent-color: var(--primary-green);
         }
         
-        /* Diet Card */
+        /* Diet Card - Updated for food examples */
         .diet-card {
             background: var(--light-bg);
             border: 2px solid var(--border-color);
@@ -541,6 +483,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             padding: 20px;
             margin-bottom: 20px;
             transition: all 0.3s;
+            position: relative;
         }
         
         .diet-card:hover {
@@ -556,12 +499,90 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             gap: 10px;
         }
         
+        .food-examples {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px dashed var(--border-color);
+        }
+        
+        .food-examples h5 {
+            color: var(--text-dark);
+            font-size: 13px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .food-examples ul {
+            list-style: none;
+            padding-left: 0;
+            margin-top: 5px;
+        }
+        
+        .food-examples li {
+            font-size: 12px;
+            color: var(--text-light);
+            padding: 3px 0;
+            display: flex;
+            align-items: center;
+        }
+        
+        .food-examples li:before {
+            content: "•";
+            color: var(--primary-green);
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        
+        .food-categories {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        
+        .food-category {
+            background: white;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .food-category h6 {
+            color: var(--dark-green);
+            font-size: 11px;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+        }
+        
+        .food-list {
+            font-size: 11px;
+            color: var(--text-light);
+            line-height: 1.4;
+        }
+        
         /* Messages */
         .message {
             padding: 15px;
             border-radius: 10px;
             margin-bottom: 25px;
             border-left: 4px solid;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            animation: slideIn 0.5s ease-out;
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
         }
         
         .message.success {
@@ -574,6 +595,19 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             background: #f8d7da;
             color: #721c24;
             border-left-color: #dc3545;
+        }
+        
+        .message-icon {
+            font-size: 24px;
+        }
+        
+        .message-content {
+            flex: 1;
+        }
+        
+        .message-content strong {
+            display: block;
+            margin-bottom: 5px;
         }
         
         /* Responsive */
@@ -608,6 +642,10 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             }
             
             .preferences-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .food-categories {
                 grid-template-columns: 1fr;
             }
         }
@@ -708,6 +746,60 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             border-radius: 5px;
             transition: width 0.5s ease-in-out;
         }
+        
+        /* Save Confirmation Animation */
+        .save-confirmation {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--primary-green);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+            animation: slideInRight 0.5s ease-out, fadeOut 0.5s ease-in 2.5s forwards;
+        }
+        
+        @keyframes slideInRight {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        
+        @keyframes fadeOut {
+            to {
+                opacity: 0;
+                transform: translateX(100%);
+            }
+        }
+        
+        /* Diet Type Info Panel */
+        .diet-info-panel {
+            position: absolute;
+            top: 50px;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            z-index: 100;
+            display: none;
+        }
+        
+        .pref-option:hover .diet-info-panel {
+            display: block;
+        }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -735,7 +827,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             
             <ul class="nav-menu">
                 <li><a href="dashboard.php"><i class="fas fa-home"></i> Dashboard</a></li>
-                <li><a href="meal-plans.php"><i class="fas fa-calendar-alt"></i> My Meal Plans</a></li>
+                <li><a href="meal_plan.php"><i class="fas fa-calendar-alt"></i> My Meal Plans</a></li>
                 <li><a href="pantry.php"><i class="fas fa-utensils"></i> My Pantry</a></li>
                 <li><a href="recipes.php"><i class="fas fa-book"></i> Kenyan Recipes</a></li>
                 <li><a href="shopping-list.php"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
@@ -756,15 +848,36 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                 </div>
                 <div class="header-actions">
                     <a href="budget.php" class="btn btn-primary">
-                        <i class="fas fa-arrow-right"></i> Continue to Step 3
+                        <i class="fas fa-arrow-right"></i> Continue to Budget
                     </a>
                 </div>
             </div>
             
+            <!-- Save Confirmation -->
+            <?php if ($saved_successfully): ?>
+                <div class="save-confirmation">
+                    <i class="fas fa-check-circle" style="font-size: 24px;"></i>
+                    <div>
+                        <strong>Preferences Saved!</strong>
+                        <p style="font-size: 12px; margin-top: 5px;">Your settings have been updated</p>
+                    </div>
+                </div>
+            <?php endif; ?>
+            
             <!-- Messages -->
             <?php if ($message): ?>
                 <div class="message <?php echo $message_type; ?>">
-                    <?php echo htmlspecialchars($message); ?>
+                    <div class="message-icon">
+                        <?php if ($message_type == 'success'): ?>
+                            <i class="fas fa-check-circle"></i>
+                        <?php else: ?>
+                            <i class="fas fa-exclamation-triangle"></i>
+                        <?php endif; ?>
+                    </div>
+                    <div class="message-content">
+                        <strong><?php echo $message_type == 'success' ? 'Success!' : 'Error!'; ?></strong>
+                        <?php echo htmlspecialchars($message); ?>
+                    </div>
                 </div>
             <?php endif; ?>
             
@@ -799,7 +912,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                     <?php echo $pantry_count; ?> items added
                                 </p>
                             </div>
-                            <a href="pantry.php" class="btn btn-sm btn-outline" style="margin-top: 10px;">
+                            <a href="pantry.php" class="btn btn-outline" style="margin-top: 10px;">
                                 View Pantry
                             </a>
                         </div>
@@ -817,6 +930,11 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                     Current Step
                                 </span>
                             </div>
+                            <?php if (!empty($preferences)): ?>
+                                <p style="font-size: 12px; color: var(--primary-green); margin-top: 5px;">
+                                    <i class="fas fa-check"></i> Preferences saved
+                                </p>
+                            <?php endif; ?>
                         </div>
                     </div>
                     
@@ -830,7 +948,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                             <div class="step-status">
                                 <span class="badge badge-warning">Pending</span>
                             </div>
-                            <a href="budget.php" class="btn btn-sm btn-outline" style="margin-top: 10px;">
+                            <a href="budget.php" class="btn btn-outline" style="margin-top: 10px;">
                                 Next: Set Budget
                             </a>
                         </div>
@@ -877,6 +995,27 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <div class="food-categories">
+                                        <div class="food-category">
+                                            <h6>Proteins</h6>
+                                            <div class="food-list">Beef, Chicken, Fish, Beans, Eggs</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Carbs</h6>
+                                            <div class="food-list">Ugali, Rice, Chapati, Potatoes</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Vegetables</h6>
+                                            <div class="food-list">Sukuma Wiki, Spinach, Cabbage, Carrots</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Fruits</h6>
+                                            <div class="food-list">Mangoes, Bananas, Oranges, Avocado</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <!-- Keto/Low-Carb -->
@@ -893,6 +1032,19 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <ul>
+                                        <li>Meats: Beef, Chicken, Fish, Eggs</li>
+                                        <li>Healthy Fats: Avocado, Coconut oil, Olive oil</li>
+                                        <li>Low-Carb Veggies: Spinach, Kale, Broccoli, Cauliflower</li>
+                                        <li>Nuts & Seeds: Almonds, Walnuts, Chia seeds</li>
+                                        <li>Dairy: Cheese, Butter, Cream (full fat)</li>
+                                    </ul>
+                                    <p style="font-size: 11px; color: var(--accent-orange); margin-top: 8px;">
+                                        <i class="fas fa-info-circle"></i> Avoid: Ugali, Rice, Chapati, Sugar
+                                    </p>
+                                </div>
                             </div>
                             
                             <!-- High Protein -->
@@ -909,6 +1061,27 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <div class="food-categories">
+                                        <div class="food-category">
+                                            <h6>Animal Protein</h6>
+                                            <div class="food-list">Beef, Chicken, Fish, Eggs, Milk</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Plant Protein</h6>
+                                            <div class="food-list">Beans, Lentils, Green grams, Peas</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Protein Meals</h6>
+                                            <div class="food-list">Nyama Choma, Grilled Fish, Bean Stew</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Supplements</h6>
+                                            <div class="food-list">Protein shakes, Boiled eggs, Yogurt</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <!-- Traditional Kenyan -->
@@ -925,6 +1098,16 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <ul>
+                                        <li><strong>Staples:</strong> Ugali, Rice, Chapati, Githeri</li>
+                                        <li><strong>Proteins:</strong> Beef Stew, Chicken, Fish, Beans</li>
+                                        <li><strong>Vegetables:</strong> Sukuma Wiki, Kunde, Managu, Cabbage</li>
+                                        <li><strong>Traditional:</strong> Matoke, Mukimo, Omena, Mursik</li>
+                                        <li><strong>Snacks:</strong> Mandazi, Samosa, Viazi Karai</li>
+                                    </ul>
+                                </div>
                             </div>
                             
                             <!-- Vegetarian -->
@@ -941,6 +1124,30 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <div class="food-categories">
+                                        <div class="food-category">
+                                            <h6>Protein Sources</h6>
+                                            <div class="food-list">Beans, Lentils, Peas, Green grams</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Dairy/Eggs</h6>
+                                            <div class="food-list">Milk, Eggs, Yogurt, Cheese</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Vegetarian Meals</h6>
+                                            <div class="food-list">Vegetable Stew, Bean Chapati, Githeri</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Snacks</h6>
+                                            <div class="food-list">Fruits, Nuts, Vegetable Samosa</div>
+                                        </div>
+                                    </div>
+                                    <p style="font-size: 11px; color: var(--accent-orange); margin-top: 8px;">
+                                        <i class="fas fa-info-circle"></i> Includes eggs and dairy, no meat or fish
+                                    </p>
+                                </div>
                             </div>
                             
                             <!-- Vegan -->
@@ -957,6 +1164,19 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <ul>
+                                        <li><strong>Proteins:</strong> Beans, Lentils, Chickpeas, Tofu</li>
+                                        <li><strong>Grains:</strong> Ugali (water only), Rice, Millet, Sorghum</li>
+                                        <li><strong>Vegetables:</strong> All fresh vegetables</li>
+                                        <li><strong>Fruits:</strong> All fresh fruits</li>
+                                        <li><strong>Fats:</strong> Avocado, Coconut, Plant oils</li>
+                                    </ul>
+                                    <p style="font-size: 11px; color: var(--accent-orange); margin-top: 8px;">
+                                        <i class="fas fa-info-circle"></i> No meat, dairy, eggs, or honey
+                                    </p>
+                                </div>
                             </div>
                             
                             <!-- Modern Healthy -->
@@ -973,6 +1193,27 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <div class="food-categories">
+                                        <div class="food-category">
+                                            <h6>Breakfast</h6>
+                                            <div class="food-list">Oatmeal, Yogurt, Fruit Smoothies, Eggs</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Lunch/Dinner</h6>
+                                            <div class="food-list">Grilled Chicken, Salads, Stir-fries, Soups</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Snacks</h6>
+                                            <div class="food-list">Nuts, Fruits, Whole grain crackers</div>
+                                        </div>
+                                        <div class="food-category">
+                                            <h6>Traditional Mix</h6>
+                                            <div class="food-list">Ugali with grilled fish, Vegetable rice</div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             
                             <!-- Weight Management -->
@@ -989,6 +1230,19 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                                         </p>
                                     </div>
                                 </label>
+                                <div class="food-examples">
+                                    <h5><i class="fas fa-utensils"></i> Example Foods:</h5>
+                                    <ul>
+                                        <li><strong>Lean Proteins:</strong> Grilled chicken, Fish, Beans, Lentils</li>
+                                        <li><strong>Low-Cal Carbs:</strong> Sweet potatoes, Brown rice, Whole grains</li>
+                                        <li><strong>Vegetables:</strong> Leafy greens, Broccoli, Carrots, Tomatoes</li>
+                                        <li><strong>Fruits:</strong> Berries, Apples, Watermelon, Oranges</li>
+                                        <li><strong>Healthy Fats:</strong> Avocado (small), Nuts (portion controlled)</li>
+                                    </ul>
+                                    <p style="font-size: 11px; color: var(--accent-orange); margin-top: 8px;">
+                                        <i class="fas fa-info-circle"></i> Portion-controlled, balanced meals
+                                    </p>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -1230,7 +1484,7 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
                 
                 <!-- Form Actions -->
                 <div class="content-section" style="text-align: center; background: var(--light-green);">
-                    <button type="submit" name="save_preferences" class="btn btn-primary btn-lg">
+                    <button type="submit" name="save_preferences" class="btn btn-primary btn-lg" onclick="showSaveAnimation()">
                         <i class="fas fa-save"></i> Save Preferences
                     </button>
                     <a href="budget.php" class="btn btn-outline btn-lg" style="margin-left: 15px;">
@@ -1260,6 +1514,9 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
         // Check the corresponding radio button
         const radioId = 'diet_' + type;
         document.getElementById(radioId).checked = true;
+        
+        // Show save reminder
+        showSaveReminder();
     }
     
     // Toggle meal preference function
@@ -1271,6 +1528,36 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             element.classList.add('selected');
         } else {
             element.classList.remove('selected');
+        }
+        
+        // Show save reminder
+        showSaveReminder();
+    }
+    
+    // Show save reminder
+    function showSaveReminder() {
+        const saveBtn = document.querySelector('button[name="save_preferences"]');
+        if (saveBtn) {
+            saveBtn.innerHTML = '<i class="fas fa-exclamation-circle"></i> Save Changes';
+            saveBtn.style.background = 'var(--accent-orange)';
+        }
+    }
+    
+    // Show save animation
+    function showSaveAnimation() {
+        const saveBtn = document.querySelector('button[name="save_preferences"]');
+        if (saveBtn) {
+            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            saveBtn.disabled = true;
+            
+            // Reset button after 2 seconds
+            setTimeout(() => {
+                if (!<?php echo $saved_successfully ? 'true' : 'false'; ?>) {
+                    saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Preferences';
+                    saveBtn.disabled = false;
+                    saveBtn.style.background = '';
+                }
+            }, 2000);
         }
     }
     
@@ -1285,21 +1572,17 @@ $pantry_count = mysqli_fetch_assoc($pantry_count_result)['count'] ?? 0;
             }
         }
         
-        // Add click handlers to all preference options
-        const prefOptions = document.querySelectorAll('.pref-option');
-        prefOptions.forEach(option => {
-            option.addEventListener('click', function(e) {
-                // Prevent multiple triggers
-                if (e.target.tagName === 'INPUT') return;
-                
-                // For radio options (diet type)
-                const radio = this.querySelector('input[type="radio"]');
-                if (radio) {
-                    const type = radio.id.replace('diet_', '');
-                    selectDietType(type);
-                }
-            });
+        // Auto-save reminder when form changes
+        const formInputs = document.querySelectorAll('input, select, textarea');
+        formInputs.forEach(input => {
+            input.addEventListener('change', showSaveReminder);
         });
+        
+        // Check if preferences are already saved
+        <?php if (!empty($preferences)): ?>
+            document.querySelector('.step:nth-child(2) .badge-warning').textContent = '✓ Completed';
+            document.querySelector('.step:nth-child(2) .badge-warning').className = 'badge badge-success';
+        <?php endif; ?>
     });
     </script>
 </body>

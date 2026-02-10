@@ -10,18 +10,71 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['full_name'];
 
-// 1. Get user's stats from database
+// 1. Get current week dates for proper calculations
+$monday = date('Y-m-d', strtotime('monday this week'));
+$sunday = date('Y-m-d', strtotime('sunday this week'));
+$today = date('Y-m-d');
+
+// 2. Get user's weekly budget - Check BOTH budget tables
+$weekly_budget = 5000; // Default
+$budget_amount = 0;
+
+// First try user_budgets table (it has status field)
+$budget_query = "SELECT amount, start_date, end_date FROM user_budgets 
+                 WHERE user_id = $user_id 
+                 AND status = 'Active'
+                 AND start_date <= '$today' 
+                 AND end_date >= '$today' 
+                 LIMIT 1";
+$budget_result = mysqli_query($conn, $budget_query);
+
+if ($budget_result && mysqli_num_rows($budget_result) > 0) {
+    $budget_row = mysqli_fetch_assoc($budget_result);
+    $budget_amount = $budget_row['amount'];
+} else {
+    // If no active budget in user_budgets, try budgets table
+    $budget_query2 = "SELECT amount, start_date, end_date FROM budgets 
+                      WHERE user_id = $user_id 
+                      AND start_date <= '$today' 
+                      AND end_date >= '$today' 
+                      LIMIT 1";
+    $budget_result2 = mysqli_query($conn, $budget_query2);
+    if ($budget_result2 && mysqli_num_rows($budget_result2) > 0) {
+        $budget_row = mysqli_fetch_assoc($budget_result2);
+        $budget_amount = $budget_row['amount'];
+    }
+}
+
+$weekly_budget = $budget_amount > 0 ? $budget_amount : $weekly_budget;
+
+// 3. Get budget used THIS WEEK (from meals)
+$budget_used = 0;
+$budget_used_query = "SELECT COALESCE(SUM(r.estimated_cost), 0) as total_cost
+                      FROM meals m
+                      JOIN recipes r ON m.recipe_id = r.recipe_id
+                      JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
+                      WHERE mp.user_id = $user_id 
+                      AND m.scheduled_date >= '$monday'
+                      AND m.scheduled_date <= '$sunday'";
+$budget_used_result = mysqli_query($conn, $budget_used_query);
+if ($budget_used_result && mysqli_num_rows($budget_used_result) > 0) {
+    $budget_row = mysqli_fetch_assoc($budget_used_result);
+    $budget_used = $budget_row['total_cost'];
+}
+
+// 4. Get user's stats
 $stats = [
     'total_plans' => 0,
     'active_plans' => 0,
-    'budget_used' => 0,
+    'budget_used' => $budget_used,
     'pantry_items' => 0,
-    'plans_generated' => 0, // NEW: Track plan generations
-    'generated_this_week' => 0, // NEW: Plans generated this week
-    'generated_this_month' => 0 // NEW: Plans generated this month
+    'plans_generated' => 0,
+    'generated_this_week' => 0,
+    'generated_this_month' => 0,
+    'weekly_budget' => $weekly_budget
 ];
 
-// Total meal plans (SAVED plans)
+// Total meal plans
 $plans_query = "SELECT COUNT(*) as total FROM meal_plans WHERE user_id = $user_id";
 $result = mysqli_query($conn, $plans_query);
 if ($result && mysqli_num_rows($result) > 0) {
@@ -31,24 +84,14 @@ if ($result && mysqli_num_rows($result) > 0) {
 // Active meal plans (this week)
 $active_query = "SELECT COUNT(*) as active FROM meal_plans 
                  WHERE user_id = $user_id 
-                 AND start_date <= CURDATE() 
-                 AND end_date >= CURDATE()";
+                 AND start_date <= '$today' 
+                 AND end_date >= '$today'";
 $result = mysqli_query($conn, $active_query);
 if ($result && mysqli_num_rows($result) > 0) {
     $stats['active_plans'] = mysqli_fetch_assoc($result)['active'];
 }
 
-// Budget used (this week) - FIXED: Using amount instead of spent
-$budget_query = "SELECT COALESCE(SUM(amount), 0) as budget_amount FROM budgets 
-                 WHERE user_id = $user_id 
-                 AND start_date <= CURDATE() 
-                 AND end_date >= CURDATE()";
-$result = mysqli_query($conn, $budget_query);
-if ($result && mysqli_num_rows($result) > 0) {
-    $stats['budget_used'] = mysqli_fetch_assoc($result)['budget_amount'];
-}
-
-// NEW: Get total plans generated (from user_activity table)
+// Get plans generated (all time) - using created_at column
 $generated_query = "SELECT COUNT(*) as generated_count FROM user_activity 
                     WHERE user_id = $user_id 
                     AND activity_type = 'plan_generated'";
@@ -57,28 +100,31 @@ if ($result && mysqli_num_rows($result) > 0) {
     $stats['plans_generated'] = mysqli_fetch_assoc($result)['generated_count'];
 }
 
-// NEW: Get plans generated this week
+// Get plans generated this week - using created_at column
 $week_generated_query = "SELECT COUNT(*) as week_count FROM user_activity 
                          WHERE user_id = $user_id 
                          AND activity_type = 'plan_generated' 
-                         AND YEARWEEK(created_at, 1) = YEARWEEK(CURDATE(), 1)";
+                         AND DATE(created_at) >= '$monday'
+                         AND DATE(created_at) <= '$sunday'";
 $result = mysqli_query($conn, $week_generated_query);
 if ($result && mysqli_num_rows($result) > 0) {
     $stats['generated_this_week'] = mysqli_fetch_assoc($result)['week_count'];
 }
 
-// NEW: Get plans generated this month
+// Get plans generated this month
+$current_month = date('m');
+$current_year = date('Y');
 $month_generated_query = "SELECT COUNT(*) as month_count FROM user_activity 
                           WHERE user_id = $user_id 
                           AND activity_type = 'plan_generated' 
-                          AND YEAR(created_at) = YEAR(CURDATE()) 
-                          AND MONTH(created_at) = MONTH(CURDATE())";
+                          AND MONTH(created_at) = $current_month 
+                          AND YEAR(created_at) = $current_year";
 $result = mysqli_query($conn, $month_generated_query);
 if ($result && mysqli_num_rows($result) > 0) {
     $stats['generated_this_month'] = mysqli_fetch_assoc($result)['month_count'];
 }
 
-// NEW: Get recent plan generation activity
+// Get recent plan generation activity - using created_at column
 $recent_activity_query = "SELECT activity_details, created_at FROM user_activity 
                           WHERE user_id = $user_id 
                           AND activity_type = 'plan_generated' 
@@ -88,12 +134,30 @@ $recent_activity_result = mysqli_query($conn, $recent_activity_query);
 $recent_activities = [];
 if ($recent_activity_result) {
     while ($activity = mysqli_fetch_assoc($recent_activity_result)) {
+        // Calculate time difference for display
+        $activity_time = strtotime($activity['created_at']);
+        $current_time = time();
+        $time_diff = $current_time - $activity_time;
+        
+        if ($time_diff < 3600) { // Less than 1 hour
+            $minutes = floor($time_diff / 60);
+            $time_display = $minutes == 0 ? 'Just now' : $minutes . ' min ago';
+        } elseif ($time_diff < 86400) { // Less than 1 day
+            $hours = floor($time_diff / 3600);
+            $time_display = $hours . ' hour' . ($hours > 1 ? 's' : '') . ' ago';
+        } elseif ($time_diff < 172800) { // Less than 2 days
+            $time_display = 'Yesterday at ' . date('h:i A', $activity_time);
+        } else {
+            $time_display = date('M d, h:i A', $activity_time);
+        }
+        
+        $activity['display_time'] = $time_display;
         $recent_activities[] = $activity;
     }
 }
 
-// Today's meals from database
-$today_query = "SELECT m.*, r.recipe_name, r.calories, r.estimated_cost, r.meal_type 
+// 5. Today's meals from database - FIXED: Changed mp.plan_name to mp.name
+$today_query = "SELECT m.*, r.recipe_name, r.calories, r.estimated_cost, r.meal_type, mp.name as plan_name
                 FROM meals m
                 JOIN recipes r ON m.recipe_id = r.recipe_id
                 JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
@@ -116,14 +180,14 @@ if ($today_result) {
     }
 }
 
-// 2. Get recommended recipes (Kenyan dishes) from database
+// 6. Get recommended recipes
 $recommended_query = "SELECT * FROM recipes 
                       WHERE meal_type IN ('Breakfast', 'Lunch', 'Dinner') 
                       ORDER BY RAND() 
                       LIMIT 3";
 $recommended_result = mysqli_query($conn, $recommended_query);
 
-// 3. Get meal categories with Kenyan recipes from database
+// 7. Get meal categories with recipes
 $categories = [];
 $meal_types = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
 
@@ -141,80 +205,74 @@ foreach ($meal_types as $type) {
     }
 }
 
-// 4. Calculate nutrition for today from database - FIXED QUERY
+// 8. Calculate nutrition for today
 $nutrition = [
     'total_calories' => 0,
     'total_protein' => 0,
     'total_carbs' => 0,
-    'total_fats' => 0,
-    'total_cost' => 0
+    'total_fats' => 0
 ];
 
-// First check if nutrition columns exist
-$check_cols_query = "SHOW COLUMNS FROM recipes WHERE Field IN ('protein', 'carbs', 'fats')";
-$check_result = mysqli_query($conn, $check_cols_query);
-$has_nutrition = (mysqli_num_rows($check_result) > 0);
-
-if ($has_nutrition) {
-    // Use actual nutrition columns if they exist
-    $nutrition_query = "SELECT 
-        COALESCE(SUM(r.calories), 0) as total_calories,
-        COALESCE(SUM(r.protein), 0) as total_protein,
-        COALESCE(SUM(r.carbs), 0) as total_carbs,
-        COALESCE(SUM(r.fats), 0) as total_fats,
-        COALESCE(SUM(r.estimated_cost), 0) as total_cost
-        FROM meals m
-        JOIN recipes r ON m.recipe_id = r.recipe_id
-        JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
-        WHERE mp.user_id = $user_id 
-        AND m.scheduled_date = CURDATE()";
-} else {
-    // Fallback if nutrition columns don't exist
-    $nutrition_query = "SELECT 
-        COALESCE(SUM(300), 0) as total_calories,
-        COALESCE(SUM(15), 0) as total_protein,
-        COALESCE(SUM(50), 0) as total_carbs,
-        COALESCE(SUM(10), 0) as total_fats,
-        COALESCE(SUM(r.estimated_cost), 0) as total_cost
-        FROM meals m
-        JOIN recipes r ON m.recipe_id = r.recipe_id
-        JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
-        WHERE mp.user_id = $user_id 
-        AND m.scheduled_date = CURDATE()";
-}
+$nutrition_query = "SELECT 
+    COALESCE(SUM(r.calories), 0) as total_calories,
+    COALESCE(SUM(r.protein), 0) as total_protein,
+    COALESCE(SUM(r.carbs), 0) as total_carbs,
+    COALESCE(SUM(r.fats), 0) as total_fats
+    FROM meals m
+    JOIN recipes r ON m.recipe_id = r.recipe_id
+    JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
+    WHERE mp.user_id = $user_id 
+    AND m.scheduled_date = CURDATE()";
 
 $nutrition_result = mysqli_query($conn, $nutrition_query);
 if ($nutrition_result && mysqli_num_rows($nutrition_result) > 0) {
     $nutrition = mysqli_fetch_assoc($nutrition_result);
 }
 
-// 5. Get user's weekly budget from database
-$weekly_budget_query = "SELECT amount FROM budgets 
-                        WHERE user_id = $user_id 
-                        AND start_date <= CURDATE() 
-                        AND end_date >= CURDATE() 
-                        LIMIT 1";
-$weekly_budget_result = mysqli_query($conn, $weekly_budget_query);
-$weekly_budget = 5000; // Default if not set
-if ($weekly_budget_result && mysqli_num_rows($weekly_budget_result) > 0) {
-    $budget_row = mysqli_fetch_assoc($weekly_budget_result);
-    $weekly_budget = $budget_row['amount'];
-}
-
-// 6. Get pantry items count - Check if pantry table exists first
+// 9. Get pantry items count
 $pantry_count = 0;
-$check_pantry = "SHOW TABLES LIKE 'pantry'";
-$pantry_exists = mysqli_query($conn, $check_pantry);
-
-if (mysqli_num_rows($pantry_exists) > 0) {
-    $pantry_query = "SELECT COUNT(*) as count FROM pantry WHERE user_id = $user_id";
-    $pantry_result = mysqli_query($conn, $pantry_query);
-    if ($pantry_result) {
-        $pantry_data = mysqli_fetch_assoc($pantry_result);
-        $pantry_count = $pantry_data['count'];
-    }
+$pantry_query = "SELECT COUNT(*) as count FROM pantry WHERE user_id = $user_id";
+$pantry_result = mysqli_query($conn, $pantry_query);
+if ($pantry_result) {
+    $pantry_data = mysqli_fetch_assoc($pantry_result);
+    $pantry_count = $pantry_data['count'];
 }
 $stats['pantry_items'] = $pantry_count;
+
+// 10. Get weekly meal statistics
+$weekly_stats_query = "SELECT 
+    DAYNAME(m.scheduled_date) as day_name,
+    COUNT(m.meal_id) as meal_count,
+    COALESCE(SUM(r.estimated_cost), 0) as daily_cost
+    FROM meals m
+    JOIN recipes r ON m.recipe_id = r.recipe_id
+    JOIN meal_plans mp ON m.mealplan_id = mp.mealplan_id
+    WHERE mp.user_id = $user_id 
+    AND m.scheduled_date >= '$monday'
+    AND m.scheduled_date <= '$sunday'
+    GROUP BY m.scheduled_date
+    ORDER BY m.scheduled_date";
+
+$weekly_stats_result = mysqli_query($conn, $weekly_stats_query);
+$weekly_stats = [];
+if ($weekly_stats_result) {
+    while ($week = mysqli_fetch_assoc($weekly_stats_result)) {
+        $weekly_stats[] = $week;
+    }
+}
+
+// 11. Get user's active budget from user_budgets table
+$active_budget_query = "SELECT amount, start_date, end_date, current_spending FROM user_budgets 
+                        WHERE user_id = $user_id 
+                        AND status = 'Active' 
+                        AND start_date <= '$today' 
+                        AND end_date >= '$today' 
+                        LIMIT 1";
+$active_budget_result = mysqli_query($conn, $active_budget_query);
+$active_budget = null;
+if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
+    $active_budget = mysqli_fetch_assoc($active_budget_result);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -394,6 +452,12 @@ $stats['pantry_items'] = $pantry_count;
             border-radius: 8px;
             margin-bottom: 5px;
             border-left: 3px solid var(--primary-green);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .meal-item:hover {
+            transform: translateX(5px);
+            background: #e8f8f1;
         }
         .meal-item:last-child {
             margin-bottom: 0;
@@ -405,6 +469,12 @@ $stats['pantry_items'] = $pantry_count;
         .meal-item p {
             color: var(--text-light);
             font-size: 13px;
+        }
+        .meal-plan-name {
+            color: var(--accent-blue);
+            font-size: 11px;
+            margin-top: 3px;
+            font-style: italic;
         }
         /* Main Content */
         .main-content {
@@ -528,6 +598,9 @@ $stats['pantry_items'] = $pantry_count;
         .stat-icon.month {
             background: linear-gradient(135deg, #e74c3c, #c0392b);
         }
+        .stat-icon.budget-total {
+            background: linear-gradient(135deg, #2ecc71, #27ae60);
+        }
         .stat-info h3 {
             font-size: 24px;
             margin-bottom: 5px;
@@ -536,13 +609,149 @@ $stats['pantry_items'] = $pantry_count;
             color: var(--text-light);
             font-size: 14px;
         }
-        /* Main Dashboard Grid */
+        /* Weekly Overview */
+        .weekly-overview {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            border: 1px solid var(--border-color);
+        }
+        .weekly-overview h3 {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .week-days {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        .day-card {
+            flex: 1;
+            text-align: center;
+            padding: 15px 5px;
+            border-radius: 10px;
+            background: var(--light-bg);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s;
+        }
+        .day-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+        .day-card.today {
+            background: linear-gradient(135deg, var(--light-green), #e8f8f1);
+            border: 2px solid var(--primary-green);
+        }
+        .day-name {
+            font-weight: bold;
+            color: var(--text-dark);
+            font-size: 14px;
+            margin-bottom: 8px;
+        }
+        .day-meals {
+            font-size: 12px;
+            color: var(--text-light);
+            margin: 5px 0;
+        }
+        .day-cost {
+            font-size: 14px;
+            font-weight: bold;
+            color: var(--primary-green);
+        }
+        /* Recent Activity Section */
+        .recent-activity {
+            background: white;
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 25px;
+            border: 1px solid var(--border-color);
+        }
+        .recent-activity h4 {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .activity-list {
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        .activity-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .activity-item:last-child {
+            border-bottom: none;
+        }
+        .activity-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .activity-icon {
+            color: var(--primary-green);
+        }
+        .activity-time {
+            color: var(--text-light);
+            font-size: 12px;
+            background: var(--light-bg);
+            padding: 3px 8px;
+            border-radius: 10px;
+        }
+        /* Budget Progress Bar */
+        .budget-progress {
+            margin: 15px 0;
+        }
+        .progress-labels {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+        }
+        .progress-bar {
+            height: 12px;
+            background: var(--border-color);
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary-green), var(--secondary-green));
+            border-radius: 6px;
+            transition: width 0.5s ease;
+        }
+        .progress-fill.warning {
+            background: linear-gradient(90deg, #f39c12, #e67e22);
+        }
+        .progress-fill.danger {
+            background: linear-gradient(90deg, #e74c3c, #c0392b);
+        }
+        /* Empty States */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-light);
+        }
+        .empty-state-icon {
+            font-size: 50px;
+            margin-bottom: 20px;
+            color: var(--border-color);
+        }
+        /* Dashboard Grid */
         .dashboard-grid {
             display: grid;
             grid-template-columns: 2fr 1fr;
             gap: 25px;
         }
-        /* Meal Categories Section */
         .meal-categories {
             background: var(--card-bg);
             border-radius: 20px;
@@ -779,6 +988,8 @@ $stats['pantry_items'] = $pantry_count;
             align-items: center;
             justify-content: center;
             gap: 10px;
+            text-decoration: none;
+            font-size: 14px;
         }
         .plan-btn.primary {
             background: var(--primary-green);
@@ -801,47 +1012,6 @@ $stats['pantry_items'] = $pantry_count;
         .budget-summary h4 {
             margin-bottom: 15px;
             color: var(--dark-green);
-        }
-        /* Recent Activity Section */
-        .recent-activity {
-            background: white;
-            border-radius: 15px;
-            padding: 20px;
-            margin-top: 25px;
-            border: 1px solid var(--border-color);
-        }
-        .recent-activity h4 {
-            color: var(--dark-green);
-            margin-bottom: 15px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .activity-list {
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .activity-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 0;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .activity-item:last-child {
-            border-bottom: none;
-        }
-        .activity-content {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .activity-icon {
-            color: var(--primary-green);
-        }
-        .activity-time {
-            color: var(--text-light);
-            font-size: 13px;
         }
         /* Responsive */
         @media (max-width: 1200px) {
@@ -872,6 +1042,13 @@ $stats['pantry_items'] = $pantry_count;
             .stats-grid {
                 grid-template-columns: 1fr;
             }
+            .week-days {
+                flex-wrap: wrap;
+            }
+            .day-card {
+                flex: 0 0 calc(50% - 10px);
+                margin-bottom: 10px;
+            }
         }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -895,7 +1072,7 @@ $stats['pantry_items'] = $pantry_count;
                     <?php echo strtoupper(substr($user_name, 0, 1)); ?>
                 </div>
                 <h3>Welcome, <?php echo htmlspecialchars($user_name); ?>!</h3>
-                <p>Don't forget to have breakfast today! 🍳</p>
+                <p>Your meal plan for today is ready! 🍽️</p>
             </div>
             
             <ul class="nav-menu">
@@ -938,23 +1115,63 @@ $stats['pantry_items'] = $pantry_count;
                                     <span class="meal-time-time"><?php echo $time; ?></span>
                                 </div>
                                 <?php foreach ($todays_meals[$type] as $meal): ?>
-                                    <div class="meal-item">
+                                    <div class="meal-item" onclick="viewMealDetails(<?php echo $meal['meal_id']; ?>)">
                                         <h5><?php echo htmlspecialchars($meal['recipe_name']); ?></h5>
                                         <p><?php echo $meal['calories']; ?> cal • KES <?php echo $meal['estimated_cost']; ?></p>
+                                        <?php if (!empty($meal['plan_name'])): ?>
+                                            <div class="meal-plan-name">From: <?php echo htmlspecialchars($meal['plan_name']); ?></div>
+                                        <?php endif; ?>
                                     </div>
                                 <?php endforeach; ?>
+                            </div>
+                        <?php else: ?>
+                            <div class="meal-time" style="opacity: 0.7;">
+                                <div class="meal-time-header">
+                                    <span class="meal-time-title"><?php echo $type; ?></span>
+                                    <span class="meal-time-time"><?php echo $time; ?></span>
+                                </div>
+                                <div class="meal-item" style="border-left-color: #ccc; background: #f9f9f9;">
+                                    <h5 style="color: var(--text-light);">No meal planned</h5>
+                                    <a href="create-plan.php" style="color: var(--primary-green); font-size: 12px; text-decoration: none;">
+                                        <i class="fas fa-plus-circle"></i> Add meal
+                                    </a>
+                                </div>
                             </div>
                         <?php endif; ?>
                     <?php endforeach; 
                 else: ?>
-                    <div style="text-align: center; padding: 20px; color: var(--text-light);">
-                        <i class="fas fa-utensils" style="font-size: 40px; margin-bottom: 10px;"></i>
+                    <div class="empty-state">
+                        <i class="fas fa-utensils empty-state-icon"></i>
                         <p>No meals planned for today</p>
-                        <a href="create-plan.php" style="background: var(--primary-green); color: white; border: none; padding: 8px 15px; border-radius: 5px; margin-top: 10px; cursor: pointer; text-decoration: none; display: inline-block;">
-                            Create Plan
+                        <a href="create-plan.php" class="plan-btn primary" style="margin-top: 15px; display: inline-block;">
+                            <i class="fas fa-magic"></i> Generate Plan
                         </a>
                     </div>
                 <?php endif; ?>
+                
+                <!-- Weekly Budget Summary in Sidebar -->
+                <div style="margin-top: 20px; padding-top: 15px; border-top: 1px solid var(--border-color);">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <span style="color: var(--text-dark); font-weight: 500;">Weekly Budget:</span>
+                        <span style="font-weight: bold; color: var(--primary-green);">
+                            KES <?php echo number_format($weekly_budget, 0); ?>
+                        </span>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px;">
+                        <span style="color: var(--text-light);">Used:</span>
+                        <span style="color: var(--accent-orange);">KES <?php echo number_format($budget_used, 0); ?></span>
+                    </div>
+                    <div style="background: #f0f0f0; height: 6px; border-radius: 3px; margin: 10px 0;">
+                        <?php 
+                        $percentage = $weekly_budget > 0 ? min(100, ($budget_used / $weekly_budget) * 100) : 0;
+                        $color = $percentage > 80 ? '#e74c3c' : ($percentage > 60 ? '#e67e22' : '#27ae60');
+                        ?>
+                        <div style="height: 100%; width: <?php echo $percentage; ?>%; background: <?php echo $color; ?>; border-radius: 3px;"></div>
+                    </div>
+                    <div style="text-align: center; font-size: 12px; color: var(--text-light);">
+                        <?php echo round($percentage, 1); ?>% used
+                    </div>
+                </div>
             </div>
         </aside>
         
@@ -963,22 +1180,54 @@ $stats['pantry_items'] = $pantry_count;
             <!-- Top Header -->
             <div class="top-header">
                 <div class="welcome-message">
-                    <h1>Find the menu you want</h1>
-                    <p>Healthy eating made simple with local Kenyan foods</p>
+                    <h1>Welcome back, <?php echo htmlspecialchars(explode(' ', $user_name)[0]); ?>!</h1>
+                    <p>Today is <?php echo date('l, F j, Y'); ?></p>
                 </div>
                 <div class="header-actions">
                     <div class="search-bar">
                         <i class="fas fa-search"></i>
-                        <input type="text" placeholder="Search for recipes, ingredients...">
+                        <input type="text" placeholder="Search recipes, ingredients...">
                     </div>
-                    <button class="notification-btn">
+                    <button class="notification-btn" onclick="showNotifications()">
                         <i class="fas fa-bell"></i>
                     </button>
-                    <button class="profile-btn">
+                    <button class="profile-btn" onclick="window.location.href='profile.php'">
                         <i class="fas fa-user"></i>
                     </button>
                 </div>
             </div>
+            
+            <!-- Weekly Overview -->
+            <?php if (!empty($weekly_stats)): ?>
+            <div class="weekly-overview">
+                <h3><i class="fas fa-chart-bar"></i> This Week Overview (<?php echo date('M d', strtotime($monday)); ?> - <?php echo date('M d', strtotime($sunday)); ?>)</h3>
+                <div class="week-days">
+                    <?php 
+                    $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+                    $today_name = date('l');
+                    
+                    foreach ($days as $day): 
+                        $day_data = null;
+                        foreach ($weekly_stats as $stat) {
+                            if (strpos($stat['day_name'], substr($day, 0, 3)) !== false) {
+                                $day_data = $stat;
+                                break;
+                            }
+                        }
+                    ?>
+                        <div class="day-card <?php echo $day === $today_name ? 'today' : ''; ?>" onclick="viewDayMeals('<?php echo $day; ?>')">
+                            <div class="day-name"><?php echo substr($day, 0, 3); ?></div>
+                            <div class="day-meals">
+                                <?php echo $day_data ? $day_data['meal_count'] . ' meals' : '0 meals'; ?>
+                            </div>
+                            <div class="day-cost">
+                                <?php echo $day_data && $day_data['daily_cost'] > 0 ? 'KES ' . $day_data['daily_cost'] : '-'; ?>
+                            </div>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endif; ?>
             
             <!-- Plan Generation Stats Section -->
             <div class="content-section" style="margin-bottom: 30px;">
@@ -996,7 +1245,7 @@ $stats['pantry_items'] = $pantry_count;
                             <h3><?php echo $stats['plans_generated']; ?></h3>
                             <p>Total Plans Generated</p>
                             <small style="color: var(--text-light); font-size: 12px;">
-                                <?php echo $stats['plans_generated'] == 0 ? 'Start generating plans!' : 'Great work!'; ?>
+                                <?php echo $stats['plans_generated'] == 0 ? 'Start generating!' : 'Great work!'; ?>
                             </small>
                         </div>
                     </div>
@@ -1010,7 +1259,7 @@ $stats['pantry_items'] = $pantry_count;
                             <h3><?php echo $stats['generated_this_week']; ?></h3>
                             <p>This Week</p>
                             <small style="color: var(--text-light); font-size: 12px;">
-                                <?php echo date('M d') . ' - ' . date('M d', strtotime('+6 days')); ?>
+                                <?php echo date('M d', strtotime($monday)) . ' - ' . date('M d', strtotime($sunday)); ?>
                             </small>
                         </div>
                     </div>
@@ -1029,7 +1278,7 @@ $stats['pantry_items'] = $pantry_count;
                         </div>
                     </div>
                     
-                    <!-- Next Plan Generation Card -->
+                    <!-- Next Goal Card -->
                     <div class="stat-card">
                         <div class="stat-icon pantry">
                             <i class="fas fa-bullseye"></i>
@@ -1094,9 +1343,9 @@ $stats['pantry_items'] = $pantry_count;
                     </div>
                     <div class="stat-info">
                         <h3><?php echo $stats['total_plans']; ?></h3>
-                        <p>Total Meal Plans</p>
+                        <p>Saved Meal Plans</p>
                         <small style="color: var(--text-light); font-size: 12px;">
-                            <?php echo $stats['active_plans']; ?> active
+                            <?php echo $stats['active_plans']; ?> active this week
                         </small>
                     </div>
                 </div>
@@ -1109,7 +1358,7 @@ $stats['pantry_items'] = $pantry_count;
                         <h3><?php echo $stats['pantry_items']; ?></h3>
                         <p>Pantry Items</p>
                         <small style="color: var(--text-light); font-size: 12px;">
-                            Ready to use
+                            Available for cooking
                         </small>
                     </div>
                 </div>
@@ -1122,27 +1371,23 @@ $stats['pantry_items'] = $pantry_count;
                         <h3>KES <?php echo number_format($stats['budget_used'], 0); ?></h3>
                         <p>Budget Used</p>
                         <small style="color: var(--text-light); font-size: 12px;">
-                            This week
+                            This week (<?php echo date('M d', strtotime($monday)); ?> - <?php echo date('M d', strtotime($sunday)); ?>)
                         </small>
                     </div>
                 </div>
                 
                 <div class="stat-card">
-                    <div class="stat-icon recipes">
-                        <i class="fas fa-book"></i>
+                    <div class="stat-icon budget-total">
+                        <i class="fas fa-piggy-bank"></i>
                     </div>
                     <div class="stat-info">
-                        <h3><?php 
-                        // Count total recipes
-                        $recipe_count = 0;
-                        foreach ($categories as $cat) {
-                            $recipe_count += count($cat);
-                        }
-                        echo $recipe_count * 5; // Multiply for better display
-                        ?></h3>
-                        <p>Available Recipes</p>
+                        <h3>KES <?php echo number_format($stats['weekly_budget'], 0); ?></h3>
+                        <p>Weekly Budget</p>
                         <small style="color: var(--text-light); font-size: 12px;">
-                            Kenyan dishes
+                            <?php 
+                            $remaining = $stats['weekly_budget'] - $stats['budget_used'];
+                            echo 'KES ' . number_format($remaining, 0) . ' remaining';
+                            ?>
                         </small>
                     </div>
                 </div>
@@ -1160,26 +1405,7 @@ $stats['pantry_items'] = $pantry_count;
                                 <span><?php echo htmlspecialchars($activity['activity_details']); ?></span>
                             </div>
                             <span class="activity-time">
-                                <?php 
-                                // Format the date nicely
-                                $date = new DateTime($activity['created_at']);
-                                $now = new DateTime();
-                                $interval = $date->diff($now);
-                                
-                                if ($interval->days == 0) {
-                                    if ($interval->h < 1) {
-                                        echo $interval->i . ' min ago';
-                                    } else {
-                                        echo 'Today, ' . $date->format('h:i A');
-                                    }
-                                } elseif ($interval->days == 1) {
-                                    echo 'Yesterday, ' . $date->format('h:i A');
-                                } elseif ($interval->days < 7) {
-                                    echo $interval->days . ' days ago';
-                                } else {
-                                    echo $date->format('M d, h:i A');
-                                }
-                                ?>
+                                <?php echo $activity['display_time']; ?>
                             </span>
                         </div>
                     <?php endforeach; ?>
@@ -1192,13 +1418,12 @@ $stats['pantry_items'] = $pantry_count;
                 <!-- Left Column: Meal Categories -->
                 <div class="meal-categories">
                     <div class="section-header">
-                        <h2>Today's Meal Categories</h2>
+                        <h2>Meal Categories</h2>
                         <a href="recipes.php" class="view-all">View All →</a>
                     </div>
                     
                     <div class="category-grid">
                         <?php 
-                        // Display only categories that have recipes
                         foreach ($categories as $category => $recipes): 
                             if (empty($recipes)) continue;
                             $icon_class = strtolower($category);
@@ -1212,14 +1437,7 @@ $stats['pantry_items'] = $pantry_count;
                                                  ($category == 'Dinner' ? 'moon' : 'apple-alt')); 
                                         ?>"></i>
                                     </div>
-                                    <h3><?php echo $category; ?> 
-                                        <?php if ($category != 'Snack'): ?>
-                                            <span class="meal-time-time" style="font-size: 12px; margin-left: 10px;">
-                                                <?php echo $category == 'Breakfast' ? '06:30 AM' : 
-                                                       ($category == 'Lunch' ? '01:00 PM' : '07:30 PM'); ?>
-                                            </span>
-                                        <?php endif; ?>
-                                    </h3>
+                                    <h3><?php echo $category; ?></h3>
                                 </div>
                                 <div class="meal-items">
                                     <?php foreach ($recipes as $recipe): ?>
@@ -1234,7 +1452,7 @@ $stats['pantry_items'] = $pantry_count;
                                                     echo isset($recipe['calories']) ? $recipe['calories'] . ' cal' : 'N/A';
                                                     ?>
                                                 </span>
-                                                <button class="add-btn" onclick="window.location.href='create-plan.php'">
+                                                <button class="add-btn" onclick="addToPlan(<?php echo $recipe['recipe_id']; ?>)">
                                                     Add to Plan
                                                 </button>
                                             </div>
@@ -1244,17 +1462,14 @@ $stats['pantry_items'] = $pantry_count;
                             </div>
                         <?php endforeach; ?>
                         
-                        <?php 
-                        // If no recipes found, show message
-                        $total_recipes = 0;
-                        foreach ($categories as $cat) {
-                            $total_recipes += count($cat);
-                        }
-                        if ($total_recipes == 0): ?>
+                        <?php if (array_sum(array_map('count', $categories)) == 0): ?>
                             <div style="grid-column: 1 / -1; text-align: center; padding: 40px; color: var(--text-light);">
                                 <i class="fas fa-utensils" style="font-size: 50px; margin-bottom: 20px;"></i>
                                 <h3>No recipes available</h3>
                                 <p>Add some recipes to get started with meal planning</p>
+                                <a href="recipes.php" class="plan-btn primary" style="margin-top: 15px; display: inline-block;">
+                                    <i class="fas fa-plus"></i> Add Recipes
+                                </a>
                             </div>
                         <?php endif; ?>
                     </div>
@@ -1268,7 +1483,6 @@ $stats['pantry_items'] = $pantry_count;
                         </div>
                         <div class="recommended-grid">
                             <?php 
-                            // Reset pointer and display recipes
                             mysqli_data_seek($recommended_result, 0);
                             while ($recipe = mysqli_fetch_assoc($recommended_result)): ?>
                                 <div class="recommended-card">
@@ -1282,9 +1496,8 @@ $stats['pantry_items'] = $pantry_count;
                                     <h4><?php echo htmlspecialchars($recipe['recipe_name']); ?></h4>
                                     <div class="price-comparison">
                                         <span class="current-price">KES <?php echo $recipe['estimated_cost']; ?></span>
-                                        <span class="original-price">KES <?php echo round($recipe['estimated_cost'] * 1.1); ?></span>
                                     </div>
-                                    <button class="add-btn" onclick="window.location.href='create-plan.php'">
+                                    <button class="add-btn" onclick="addToPlan(<?php echo $recipe['recipe_id']; ?>)">
                                         Add to Plan
                                     </button>
                                 </div>
@@ -1297,8 +1510,8 @@ $stats['pantry_items'] = $pantry_count;
                 <!-- Right Column: Your Meal Plan -->
                 <div class="meal-plan-sidebar">
                     <div class="plan-header">
-                        <h2>Your Meal Plan</h2>
-                        <p class="plan-date">Today, <?php echo date('d M Y'); ?></p>
+                        <h2>Today's Nutrition</h2>
+                        <p class="plan-date"><?php echo date('l, F j'); ?></p>
                     </div>
                     
                     <div class="nutrition-summary">
@@ -1328,30 +1541,68 @@ $stats['pantry_items'] = $pantry_count;
                             <i class="fas fa-plus-circle"></i> Create New Plan
                         </a>
                         <a href="shopping-list.php" class="plan-btn secondary">
-                            <i class="fas fa-shopping-cart"></i> Generate Shopping List
+                            <i class="fas fa-shopping-cart"></i> Shopping List
+                        </a>
+                        <a href="budget.php" class="plan-btn secondary">
+                            <i class="fas fa-wallet"></i> Budget Tracker
                         </a>
                     </div>
                     
+                    <!-- Budget Summary -->
                     <div class="budget-summary">
-                        <h4>Weekly Budget</h4>
+                        <h4><i class="fas fa-chart-pie"></i> Weekly Budget Progress</h4>
                         <div style="margin: 15px 0;">
                             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                                <span>Budget:</span>
+                                <span>Total Budget:</span>
                                 <span style="font-weight: bold;">KES <?php echo number_format($weekly_budget, 0); ?></span>
                             </div>
                             <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
-                                <span>Used:</span>
-                                <span style="color: var(--accent-orange); font-weight: bold;">KES <?php echo number_format($stats['budget_used'], 0); ?></span>
+                                <span>Used This Week:</span>
+                                <span style="color: var(--accent-orange); font-weight: bold;">
+                                    KES <?php echo number_format($budget_used, 0); ?>
+                                </span>
                             </div>
-                            <div style="display: flex; justify-content: space-between;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
                                 <span>Remaining:</span>
                                 <span style="color: var(--primary-green); font-weight: bold;">
-                                    KES <?php echo number_format($weekly_budget - $stats['budget_used'], 0); ?>
+                                    KES <?php echo number_format($weekly_budget - $budget_used, 0); ?>
                                 </span>
                             </div>
                         </div>
-                        <div style="background: #f0f0f0; height: 10px; border-radius: 5px; margin-top: 10px;">
-                            <div style="background: var(--primary-green); height: 100%; width: <?php echo min(100, ($stats['budget_used'] / $weekly_budget) * 100); ?>%; border-radius: 5px;"></div>
+                        
+                        <div class="budget-progress">
+                            <div class="progress-labels">
+                                <span>KES 0</span>
+                                <span>KES <?php echo number_format($weekly_budget, 0); ?></span>
+                            </div>
+                            <div class="progress-bar">
+                                <?php 
+                                $percentage = $weekly_budget > 0 ? min(100, ($budget_used / $weekly_budget) * 100) : 0;
+                                $progress_class = '';
+                                if ($percentage > 80) {
+                                    $progress_class = 'danger';
+                                } elseif ($percentage > 60) {
+                                    $progress_class = 'warning';
+                                }
+                                ?>
+                                <div class="progress-fill <?php echo $progress_class; ?>" style="width: <?php echo $percentage; ?>%;"></div>
+                            </div>
+                            <div style="text-align: center; margin-top: 5px; font-size: 12px; color: var(--text-light);">
+                                <?php echo round($percentage, 1); ?>% used
+                                <?php if ($percentage > 80): ?>
+                                    <span style="color: var(--accent-red); margin-left: 10px;">
+                                        <i class="fas fa-exclamation-triangle"></i> Over budget soon!
+                                    </span>
+                                <?php elseif ($percentage > 60): ?>
+                                    <span style="color: var(--accent-orange); margin-left: 10px;">
+                                        <i class="fas fa-info-circle"></i> Moderate spending
+                                    </span>
+                                <?php else: ?>
+                                    <span style="color: var(--primary-green); margin-left: 10px;">
+                                        <i class="fas fa-check-circle"></i> On track
+                                    </span>
+                                <?php endif; ?>
+                            </div>
                         </div>
                     </div>
                     
@@ -1360,27 +1611,37 @@ $stats['pantry_items'] = $pantry_count;
                         <h4>Quick Stats</h4>
                         <div style="margin-top: 15px;">
                             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                                <span>Plans Generated:</span>
+                                <span>Meals Today:</span>
                                 <span style="font-weight: bold; color: var(--primary-green);">
-                                    <?php echo $stats['plans_generated']; ?>
+                                    <?php 
+                                    $total_today_meals = 0;
+                                    foreach ($todays_meals as $meals) {
+                                        $total_today_meals += count($meals);
+                                    }
+                                    echo $total_today_meals;
+                                    ?>
                                 </span>
                             </div>
                             <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
-                                <span>This Week:</span>
+                                <span>Meals This Week:</span>
                                 <span style="color: var(--accent-orange); font-weight: bold;">
-                                    <?php echo $stats['generated_this_week']; ?>
+                                    <?php 
+                                    $total_week_meals = 0;
+                                    foreach ($weekly_stats as $day) {
+                                        $total_week_meals += $day['meal_count'];
+                                    }
+                                    echo $total_week_meals;
+                                    ?>
                                 </span>
                             </div>
-                            <div style="display: flex; justify-content: space-between;">
-                                <span>Generation Rate:</span>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                                <span>Avg. Meal Cost:</span>
                                 <span style="color: var(--accent-blue); font-weight: bold;">
                                     <?php 
-                                    if ($stats['plans_generated'] > 0) {
-                                        $days_used = 30; // Assume 30 days of usage
-                                        $rate = $stats['plans_generated'] / $days_used;
-                                        echo round($rate, 1) . '/day';
+                                    if ($total_week_meals > 0) {
+                                        echo 'KES ' . round($budget_used / $total_week_meals, 0);
                                     } else {
-                                        echo '0/day';
+                                        echo 'KES 0';
                                     }
                                     ?>
                                 </span>
@@ -1393,34 +1654,75 @@ $stats['pantry_items'] = $pantry_count;
     </div>
     
     <script>
-        // Simple JavaScript for interactivity
-        document.querySelectorAll('.add-btn').forEach(button => {
-            button.addEventListener('click', function() {
-                window.location.href = 'create-plan.php';
-            });
-        });
+        // JavaScript for interactivity
+        
+        function viewMealDetails(mealId) {
+            alert('Viewing meal details for ID: ' + mealId + '\n\nIn a complete project, this would open a meal details page.');
+        }
+        
+        function addToPlan(recipeId) {
+            window.location.href = 'create-plan.php?recipe_id=' + recipeId;
+        }
+        
+        function viewDayMeals(dayName) {
+            alert('Viewing meals for ' + dayName + '\n\nIn a complete project, this would filter or show day-specific meals.');
+        }
+        
+        function showNotifications() {
+            alert('No new notifications.\n\nYou have ' + <?php echo $stats['plans_generated']; ?> + ' generated plans and ' + <?php echo $stats['active_plans']; ?> + ' active plans.');
+        }
         
         // Search functionality placeholder
         document.querySelector('.search-bar input').addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
-                alert('Search feature coming soon!');
+                const searchTerm = this.value.trim();
+                if (searchTerm) {
+                    alert('Searching for: "' + searchTerm + '"\n\nIn a complete project, this would search recipes and ingredients.');
+                }
             }
         });
         
-        // Notification button
-        document.querySelector('.notification-btn').addEventListener('click', function() {
-            alert('No new notifications');
-        });
-        
-        // Profile button
-        document.querySelector('.profile-btn').addEventListener('click', function() {
-            window.location.href = 'profile.php';
-        });
-        
-        // Auto-refresh page every 60 seconds to update stats
+        // Auto-refresh page every 2 minutes to update stats
         setTimeout(function() {
-            //location.reload();
-        }, 60000);
+            console.log('Auto-refreshing dashboard...');
+            location.reload();
+        }, 120000); // 2 minutes
+        
+        // Add hover effect to day cards
+        document.querySelectorAll('.day-card').forEach(card => {
+            card.addEventListener('mouseenter', function() {
+                this.style.transform = 'translateY(-5px)';
+                this.style.boxShadow = '0 10px 20px rgba(0,0,0,0.1)';
+            });
+            
+            card.addEventListener('mouseleave', function() {
+                this.style.transform = 'translateY(0)';
+                this.style.boxShadow = 'none';
+            });
+        });
+        
+        // Update budget progress bar color based on percentage
+        function updateBudgetBarColor() {
+            const budgetBar = document.querySelector('.progress-fill');
+            if (budgetBar) {
+                const width = parseInt(budgetBar.style.width);
+                if (width > 80) {
+                    budgetBar.style.background = 'linear-gradient(90deg, #e74c3c, #c0392b)';
+                } else if (width > 60) {
+                    budgetBar.style.background = 'linear-gradient(90deg, #f39c12, #e67e22)';
+                }
+            }
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateBudgetBarColor();
+            
+            // Add today's date to welcome message
+            const today = new Date();
+            const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+            console.log('Dashboard loaded on: ' + today.toLocaleDateString('en-US', options));
+        });
     </script>
 </body>
 </html>

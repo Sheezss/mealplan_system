@@ -136,6 +136,9 @@ function checkKenyanPantry($ingredient_name, $pantry_items, $quantity_needed, $u
             } elseif (($unit_needed == 'litre' && $pantry_item['unit'] == 'ml') || 
                      ($unit_needed == 'ml' && $pantry_item['unit'] == 'litre')) {
                 $conversion_rate = 1000;
+            } elseif (($unit_needed == 'dozen' && $pantry_item['unit'] == 'piece') ||
+                     ($unit_needed == 'piece' && $pantry_item['unit'] == 'dozen')) {
+                $conversion_rate = 1/12;
             }
             
             $pantry_quantity_in_needed_units = $pantry_item['quantity'] * $conversion_rate;
@@ -221,35 +224,121 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
         'shopping_list' => [],
         'pantry_items_used' => [],
         'shopping_cost' => 0,
-        'budget_remaining' => 0
+        'budget_remaining' => 0,
+        'meals_per_day_setting' => 0
     ];
     
     // Get user preferences
     $diet_type = $preferences['diet_type'] ?? 'Balanced';
     $meals_per_day = $preferences['meals_per_day'] ?? 3;
     $budget_amount = $budget['amount'] ?? 3000;
+    $meal_plan['meals_per_day_setting'] = $meals_per_day;
     
-    // Filter recipes by diet type
-    $filtered_recipes = array_filter($all_recipes, function($recipe) use ($diet_type) {
-        // Map recipe categories to diet types
+    // Get user's meal type preferences
+    $include_breakfast = $preferences['pref_breakfast'] ?? 1;
+    $include_lunch = $preferences['pref_lunch'] ?? 1;
+    $include_dinner = $preferences['pref_dinner'] ?? 1;
+    $include_snacks = $preferences['pref_snacks'] ?? 0;
+    
+    // Dietary restrictions
+    $is_vegetarian = $preferences['vegetarian'] ?? 0;
+    $is_vegan = $preferences['vegan'] ?? 0;
+    $avoid_pork = $preferences['avoid_pork'] ?? 0;
+    $avoid_beef = $preferences['avoid_beef'] ?? 0;
+    $avoid_fish = $preferences['avoid_fish'] ?? 0;
+    $avoid_dairy = $preferences['avoid_dairy'] ?? 0;
+    $avoid_eggs = $preferences['avoid_eggs'] ?? 0;
+    
+    // Define days of the week
+    $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    $daily_budget = $budget_amount / 7;
+    
+    // Filter recipes based on diet type and restrictions
+    $filtered_recipes = array_filter($all_recipes, function($recipe) use ($diet_type, $is_vegetarian, $is_vegan, $avoid_pork, $avoid_beef, $avoid_fish, $avoid_dairy, $avoid_eggs) {
+        $recipe_name = strtolower($recipe['recipe_name']);
+        
+        // Check for meat in recipe name if vegetarian/vegan
+        if ($is_vegetarian || $is_vegan) {
+            $meat_keywords = ['beef', 'chicken', 'fish', 'meat', 'nyama', 'mbuzi', 'kuku'];
+            foreach ($meat_keywords as $meat) {
+                if (strpos($recipe_name, $meat) !== false) {
+                    return false;
+                }
+            }
+        }
+        
+        // Check for dairy/eggs if vegan
+        if ($is_vegan) {
+            $vegan_forbidden = ['dairy', 'milk', 'cheese', 'yogurt', 'cream', 'butter', 'egg'];
+            foreach ($vegan_forbidden as $item) {
+                if (strpos($recipe_name, $item) !== false) {
+                    return false;
+                }
+            }
+        }
+        
+        // Check for specific avoided items
+        if ($avoid_pork && strpos($recipe_name, 'pork') !== false) return false;
+        if ($avoid_beef && strpos($recipe_name, 'beef') !== false) return false;
+        if ($avoid_fish && strpos($recipe_name, 'fish') !== false) return false;
+        
+        // Map diet types to recipe categories
         $diet_mapping = [
-            'Balanced' => ['Ugali', 'Pilau', 'Githeri', 'Chapati', 'Matoke', 'Mukimo'],
-            'Traditional-Kenyan' => ['Ugali', 'Githeri', 'Matoke', 'Mukimo', 'Nyama Choma'],
-            'Vegetarian' => ['Ugali & Sukuma Wiki', 'Githeri & Avocado', 'Matoke', 'Mukimo', 'Fruit Salad'],
-            'High-Protein' => ['Nyama Choma', 'Roasted Chicken', 'Ugali & Beef Stew', 'Chapati & Beans'],
-            'Weight-Management' => ['Fruit Salad', 'Matoke', 'Ugali & Sukuma Wiki']
+            'Balanced' => ['ugali', 'pilau', 'githeri', 'chapati', 'matoke', 'mukimo', 'roast', 'stew'],
+            'Traditional-Kenyan' => ['ugali', 'githeri', 'matoke', 'mukimo', 'nyama', 'chapati', 'pilau'],
+            'Vegetarian' => ['ugali', 'githeri', 'matoke', 'mukimo', 'fruit', 'beans', 'salad', 'soup'],
+            'Vegan' => ['ugali', 'githeri', 'matoke', 'mukimo', 'fruit', 'beans', 'salad', 'soup'],
+            'High-Protein' => ['nyama', 'beef', 'chicken', 'fish', 'beans', 'roast', 'stew', 'egg'],
+            'Weight-Management' => ['fruit', 'salad', 'matoke', 'ugali', 'githeri', 'soup', 'vegetable'],
+            'Keto' => ['nyama', 'beef', 'chicken', 'fish', 'avocado', 'roast', 'salad'],
+            'Modern-Healthy' => ['fruit', 'salad', 'roast', 'grill', 'steam', 'smoothie'],
+            'Traditional-Kenyan' => ['ugali', 'matoke', 'mukimo', 'githeri', 'chapati', 'pilau']
         ];
         
-        $allowed_names = $diet_mapping[$diet_type] ?? ['Ugali', 'Pilau', 'Githeri', 'Chapati'];
+        $allowed_keywords = $diet_mapping[$diet_type] ?? ['ugali', 'pilau', 'githeri', 'chapati'];
         
-        foreach ($allowed_names as $name) {
-            if (stripos($recipe['recipe_name'], $name) !== false) {
+        foreach ($allowed_keywords as $keyword) {
+            if (strpos($recipe_name, $keyword) !== false) {
                 return true;
             }
         }
-        return false;
+        
+        // If no specific diet type match, include all except restricted ones
+        return true;
     });
     
+    // Reset array indices
+    $filtered_recipes = array_values($filtered_recipes);
+    
+    // If no recipes match the diet type, use all recipes (excluding restricted ones)
+    if (empty($filtered_recipes)) {
+        $filtered_recipes = array_filter($all_recipes, function($recipe) use ($is_vegetarian, $is_vegan, $avoid_pork, $avoid_beef, $avoid_fish, $avoid_dairy, $avoid_eggs) {
+            $recipe_name = strtolower($recipe['recipe_name']);
+            
+            if ($is_vegetarian || $is_vegan) {
+                $meat_keywords = ['beef', 'chicken', 'fish', 'meat', 'nyama'];
+                foreach ($meat_keywords as $meat) {
+                    if (strpos($recipe_name, $meat) !== false) {
+                        return false;
+                    }
+                }
+            }
+            
+            if ($is_vegan) {
+                $vegan_forbidden = ['dairy', 'milk', 'cheese', 'butter', 'egg'];
+                foreach ($vegan_forbidden as $item) {
+                    if (strpos($recipe_name, $item) !== false) {
+                        return false;
+                    }
+                }
+            }
+            
+            return true;
+        });
+        $filtered_recipes = array_values($filtered_recipes);
+    }
+    
+    // If still no recipes, use all recipes
     if (empty($filtered_recipes)) {
         $filtered_recipes = $all_recipes;
     }
@@ -286,37 +375,42 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
         }
     }
     
-    // Define days of the week
-    $days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-    $daily_budget = $budget_amount / 7;
+    // Determine which meal types to include based on user preference
+    $meal_types_to_include = [];
+    if ($include_breakfast && $meals_per_day >= 1) $meal_types_to_include[] = 'Breakfast';
+    if ($include_lunch && $meals_per_day >= 2) $meal_types_to_include[] = 'Lunch';
+    if ($include_dinner && $meals_per_day >= 3) $meal_types_to_include[] = 'Dinner';
+    if ($include_snacks && $meals_per_day >= 4) $meal_types_to_include[] = 'Snack';
+    
+    // If no specific meal types selected, use default based on meals_per_day
+    if (empty($meal_types_to_include)) {
+        if ($meals_per_day == 1) $meal_types_to_include = ['Dinner'];
+        elseif ($meals_per_day == 2) $meal_types_to_include = ['Breakfast', 'Dinner'];
+        elseif ($meals_per_day == 3) $meal_types_to_include = ['Breakfast', 'Lunch', 'Dinner'];
+        else $meal_types_to_include = ['Breakfast', 'Lunch', 'Dinner', 'Snack'];
+    }
+    
     $used_recipe_ids = [];
     $aggregated_shopping_list = [];
     $aggregated_pantry_used = [];
     
-    // Determine which meal types to include based on user preference
-    $meal_types_to_include = [];
-    if ($meals_per_day >= 2) $meal_types_to_include[] = 'Breakfast';
-    if ($meals_per_day >= 3) $meal_types_to_include[] = 'Lunch';
-    $meal_types_to_include[] = 'Dinner'; // Always include dinner
-    if ($meals_per_day >= 4) $meal_types_to_include[] = 'Snack';
-    
+    // Generate meals for each day
     foreach ($days as $day) {
         $day_meals = [];
         $day_cost = 0;
         $day_pantry_coverage = 0;
         $meals_added = 0;
         
-        // Try to add meals based on user preference
+        // Add meals based on user preferences
         foreach ($meal_types_to_include as $meal_type) {
             if ($meals_added >= $meals_per_day) break;
             
             if (!empty($recipes_by_meal[$meal_type])) {
                 foreach ($recipes_by_meal[$meal_type] as $recipe_data) {
                     if (!in_array($recipe_data['recipe']['recipe_id'], $used_recipe_ids)) {
-                        // Check if recipe fits daily budget
                         $potential_day_cost = $day_cost + $recipe_data['store_cost'];
                         
-                        if ($potential_day_cost <= $daily_budget * 1.3) { // 30% flexibility
+                        if ($potential_day_cost <= $daily_budget * 1.3) {
                             $day_meals[] = [
                                 'data' => $recipe_data,
                                 'meal_type' => $meal_type
@@ -347,70 +441,71 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
                                 $aggregated_pantry_used[] = $used;
                             }
                             
-                            break; // Found a recipe for this meal type, move to next
+                            break;
                         }
                     }
                 }
             }
         }
         
-        // If we couldn't find enough meals, try to fill with other available meal types
-        if ($meals_added < $meals_per_day) {
-            // Get all remaining recipes sorted by pantry coverage
-            $remaining_recipes = [];
+        // If we need more meals and have room in budget, fill with other available recipes
+        while ($meals_added < $meals_per_day) {
+            $found_meal = false;
+            
             foreach ($recipes_with_coverage as $recipe_data) {
                 if (!in_array($recipe_data['recipe']['recipe_id'], $used_recipe_ids)) {
-                    $remaining_recipes[] = $recipe_data;
-                }
-            }
-            
-            // Sort remaining recipes by pantry coverage
-            usort($remaining_recipes, function($a, $b) {
-                return $b['pantry_coverage'] <=> $a['pantry_coverage'];
-            });
-            
-            foreach ($remaining_recipes as $recipe_data) {
-                if ($meals_added >= $meals_per_day) break;
-                
-                $potential_day_cost = $day_cost + $recipe_data['store_cost'];
-                
-                if ($potential_day_cost <= $daily_budget * 1.3) {
-                    // Determine meal type for this recipe
-                    $meal_type = $recipe_data['recipe']['meal_type'];
-                    if (!in_array($meal_type, $meal_types_to_include)) {
-                        $meal_type = 'Dinner'; // Default to dinner if type not preferred
-                    }
+                    $potential_day_cost = $day_cost + $recipe_data['store_cost'];
                     
-                    $day_meals[] = [
-                        'data' => $recipe_data,
-                        'meal_type' => $meal_type
-                    ];
-                    $day_cost += $recipe_data['store_cost'];
-                    $day_pantry_coverage += $recipe_data['pantry_coverage'];
-                    $used_recipe_ids[] = $recipe_data['recipe']['recipe_id'];
-                    $meals_added++;
-                    
-                    // Add to shopping list and pantry used
-                    foreach ($recipe_data['needed_from_store'] as $item) {
-                        $found = false;
-                        foreach ($aggregated_shopping_list as &$existing) {
-                            if ($existing['item'] == $item['item']) {
-                                $existing['quantity'] += $item['quantity'];
-                                $existing['estimated_cost'] += $item['estimated_cost'];
-                                $found = true;
-                                break;
+                    if ($potential_day_cost <= $daily_budget * 1.3) {
+                        // Determine which meal type this should be
+                        $meal_type = $recipe_data['recipe']['meal_type'];
+                        if (!in_array($meal_type, $meal_types_to_include)) {
+                            // Assign to the next needed meal type
+                            if ($meals_added == 0 && in_array('Breakfast', $meal_types_to_include)) {
+                                $meal_type = 'Breakfast';
+                            } elseif ($meals_added == 1 && in_array('Lunch', $meal_types_to_include)) {
+                                $meal_type = 'Lunch';
+                            } else {
+                                $meal_type = 'Dinner';
                             }
                         }
-                        if (!$found) {
-                            $aggregated_shopping_list[] = $item;
+                        
+                        $day_meals[] = [
+                            'data' => $recipe_data,
+                            'meal_type' => $meal_type
+                        ];
+                        $day_cost += $recipe_data['store_cost'];
+                        $day_pantry_coverage += $recipe_data['pantry_coverage'];
+                        $used_recipe_ids[] = $recipe_data['recipe']['recipe_id'];
+                        $meals_added++;
+                        $found_meal = true;
+                        
+                        // Add to shopping list and pantry used
+                        foreach ($recipe_data['needed_from_store'] as $item) {
+                            $found = false;
+                            foreach ($aggregated_shopping_list as &$existing) {
+                                if ($existing['item'] == $item['item']) {
+                                    $existing['quantity'] += $item['quantity'];
+                                    $existing['estimated_cost'] += $item['estimated_cost'];
+                                    $found = true;
+                                    break;
+                                }
+                            }
+                            if (!$found) {
+                                $aggregated_shopping_list[] = $item;
+                            }
                         }
-                    }
-                    
-                    foreach ($recipe_data['pantry_used'] as $used) {
-                        $aggregated_pantry_used[] = $used;
+                        
+                        foreach ($recipe_data['pantry_used'] as $used) {
+                            $aggregated_pantry_used[] = $used;
+                        }
+                        
+                        break;
                     }
                 }
             }
+            
+            if (!$found_meal) break; // No more suitable recipes
         }
         
         $average_day_coverage = $meals_added > 0 ? 
@@ -435,7 +530,6 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
     $meal_plan['pantry_items_used'] = $aggregated_pantry_used;
     $meal_plan['shopping_cost'] = array_sum(array_column($aggregated_shopping_list, 'estimated_cost'));
     $meal_plan['budget_remaining'] = $budget_amount - $meal_plan['total_cost'] - $meal_plan['shopping_cost'];
-    $meal_plan['meals_per_day_setting'] = $meals_per_day;
     
     return $meal_plan;
 }
@@ -983,6 +1077,10 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
             border-left-color: #3498db;
         }
         
+        .meal-item.snack {
+            border-left-color: #9b59b6;
+        }
+        
         .meal-header {
             display: flex;
             justify-content: space-between;
@@ -1222,11 +1320,17 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
                             <div style="font-size: 14px; color: var(--text-dark); margin-top: 5px;">
                                 <?php 
                                 $meal_types = [];
-                                if ($generated_plan['meals_per_day_setting'] >= 2) $meal_types[] = 'Breakfast';
-                                if ($generated_plan['meals_per_day_setting'] >= 3) $meal_types[] = 'Lunch';
-                                $meal_types[] = 'Dinner';
-                                if ($generated_plan['meals_per_day_setting'] >= 4) $meal_types[] = 'Snack';
-                                echo implode(', ', $meal_types);
+                                $pref_breakfast = $preferences['pref_breakfast'] ?? 1;
+                                $pref_lunch = $preferences['pref_lunch'] ?? 1;
+                                $pref_dinner = $preferences['pref_dinner'] ?? 1;
+                                $pref_snacks = $preferences['pref_snacks'] ?? 0;
+                                
+                                if ($pref_breakfast) $meal_types[] = 'Breakfast';
+                                if ($pref_lunch) $meal_types[] = 'Lunch';
+                                $meal_types[] = 'Dinner'; // Always include dinner as fallback
+                                if ($pref_snacks) $meal_types[] = 'Snack';
+                                
+                                echo implode(', ', array_unique($meal_types));
                                 ?>
                             </div>
                         </div>
@@ -1247,7 +1351,19 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
                                 <?php echo htmlspecialchars($preferences['diet_type'] ?? 'Balanced'); ?>
                             </div>
                             <div style="font-size: 14px; color: var(--text-dark); margin-top: 5px;">
-                                Personalized for your preferences
+                                <?php 
+                                $diet_details = [];
+                                if ($preferences['vegetarian'] ?? 0) $diet_details[] = 'Vegetarian';
+                                if ($preferences['vegan'] ?? 0) $diet_details[] = 'Vegan';
+                                if ($preferences['high_protein'] ?? 0) $diet_details[] = 'High Protein';
+                                if ($preferences['low_carb'] ?? 0) $diet_details[] = 'Low Carb';
+                                
+                                if (!empty($diet_details)) {
+                                    echo implode(', ', $diet_details);
+                                } else {
+                                    echo 'Personalized for your preferences';
+                                }
+                                ?>
                             </div>
                         </div>
                     </div>
@@ -1387,7 +1503,7 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
                                             default: $meal_type_color = '#7f8c8d';
                                         }
                                     ?>
-                                        <div class="meal-item" style="border-left-color: <?php echo $meal_type_color; ?>;">
+                                        <div class="meal-item <?php echo strtolower($meal_type); ?>" style="border-left-color: <?php echo $meal_type_color; ?>;">
                                             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 10px;">
                                                 <div>
                                                     <div style="font-weight: 600; color: var(--text-dark);">
