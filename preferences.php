@@ -11,11 +11,6 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['full_name'];
 
-// Handle form submission
-$message = '';
-$message_type = '';
-$saved_successfully = false;
-
 // Get pantry count for workflow
 $pantry_count_query = "SELECT COUNT(*) as count FROM pantry WHERE user_id = $user_id";
 $pantry_count_result = mysqli_query($conn, $pantry_count_query);
@@ -33,44 +28,46 @@ if (mysqli_num_rows($pref_result) > 0) {
     $preferences = mysqli_fetch_assoc($pref_result);
 }
 
-// Save preferences
-if (isset($_POST['save_preferences'])) {
-    $diet_type = mysqli_real_escape_string($conn, $_POST['diet_type'] ?? 'Balanced');
-    $cuisine_pref = mysqli_real_escape_string($conn, $_POST['cuisine_pref'] ?? 'Kenyan');
-    $spicy_level = mysqli_real_escape_string($conn, $_POST['spicy_level'] ?? 'Medium');
-    $cooking_time = mysqli_real_escape_string($conn, $_POST['cooking_time'] ?? '30-45 minutes');
-    $meals_per_day = intval($_POST['meals_per_day'] ?? 3);
+// Handle AJAX save request
+if (isset($_POST['ajax_save']) && isset($_POST['preferences_data'])) {
+    $pref_data = json_decode($_POST['preferences_data'], true);
+    
+    $diet_type = mysqli_real_escape_string($conn, $pref_data['diet_type'] ?? 'Balanced');
+    $cuisine_pref = mysqli_real_escape_string($conn, $pref_data['cuisine_pref'] ?? 'Kenyan');
+    $spicy_level = mysqli_real_escape_string($conn, $pref_data['spicy_level'] ?? 'Medium');
+    $cooking_time = mysqli_real_escape_string($conn, $pref_data['cooking_time'] ?? '30-45 minutes');
+    $meals_per_day = intval($pref_data['meals_per_day'] ?? 3);
     
     // Dietary restrictions
-    $avoid_pork = isset($_POST['avoid_pork']) ? 1 : 0;
-    $avoid_beef = isset($_POST['avoid_beef']) ? 1 : 0;
-    $avoid_fish = isset($_POST['avoid_fish']) ? 1 : 0;
-    $avoid_dairy = isset($_POST['avoid_dairy']) ? 1 : 0;
-    $avoid_gluten = isset($_POST['avoid_gluten']) ? 1 : 0;
-    $avoid_nuts = isset($_POST['avoid_nuts']) ? 1 : 0;
-    $avoid_eggs = isset($_POST['avoid_eggs']) ? 1 : 0;
+    $avoid_pork = isset($pref_data['avoid_pork']) ? 1 : 0;
+    $avoid_beef = isset($pref_data['avoid_beef']) ? 1 : 0;
+    $avoid_fish = isset($pref_data['avoid_fish']) ? 1 : 0;
+    $avoid_dairy = isset($pref_data['avoid_dairy']) ? 1 : 0;
+    $avoid_gluten = isset($pref_data['avoid_gluten']) ? 1 : 0;
+    $avoid_nuts = isset($pref_data['avoid_nuts']) ? 1 : 0;
+    $avoid_eggs = isset($pref_data['avoid_eggs']) ? 1 : 0;
     
     // Special diets
-    $vegetarian = isset($_POST['vegetarian']) ? 1 : 0;
-    $vegan = isset($_POST['vegan']) ? 1 : 0;
-    $low_carb = isset($_POST['low_carb']) ? 1 : 0;
-    $low_fat = isset($_POST['low_fat']) ? 1 : 0;
-    $low_sodium = isset($_POST['low_sodium']) ? 1 : 0;
-    $sugar_free = isset($_POST['sugar_free']) ? 1 : 0;
-    $high_protein = isset($_POST['high_protein']) ? 1 : 0;
+    $vegetarian = isset($pref_data['vegetarian']) ? 1 : 0;
+    $vegan = isset($pref_data['vegan']) ? 1 : 0;
+    $low_carb = isset($pref_data['low_carb']) ? 1 : 0;
+    $low_fat = isset($pref_data['low_fat']) ? 1 : 0;
+    $low_sodium = isset($pref_data['low_sodium']) ? 1 : 0;
+    $sugar_free = isset($pref_data['sugar_free']) ? 1 : 0;
+    $high_protein = isset($pref_data['high_protein']) ? 1 : 0;
     
     // Medical conditions
-    $diabetic = isset($_POST['diabetic']) ? 1 : 0;
-    $hypertension = isset($_POST['hypertension']) ? 1 : 0;
-    $cholesterol = isset($_POST['cholesterol']) ? 1 : 0;
-    $pregnancy = isset($_POST['pregnancy']) ? 1 : 0;
-    $lactose = isset($_POST['lactose']) ? 1 : 0;
+    $diabetic = isset($pref_data['diabetic']) ? 1 : 0;
+    $hypertension = isset($pref_data['hypertension']) ? 1 : 0;
+    $cholesterol = isset($pref_data['cholesterol']) ? 1 : 0;
+    $pregnancy = isset($pref_data['pregnancy']) ? 1 : 0;
+    $lactose = isset($pref_data['lactose']) ? 1 : 0;
     
     // Meal preferences
-    $pref_breakfast = isset($_POST['pref_breakfast']) ? 1 : 0;
-    $pref_lunch = isset($_POST['pref_lunch']) ? 1 : 0;
-    $pref_dinner = isset($_POST['pref_dinner']) ? 1 : 0;
-    $pref_snacks = isset($_POST['pref_snacks']) ? 1 : 0;
+    $pref_breakfast = isset($pref_data['pref_breakfast']) ? 1 : 0;
+    $pref_lunch = isset($pref_data['pref_lunch']) ? 1 : 0;
+    $pref_dinner = isset($pref_data['pref_dinner']) ? 1 : 0;
+    $pref_snacks = isset($pref_data['pref_snacks']) ? 1 : 0;
     
     // Check if preferences already exist
     if (empty($preferences)) {
@@ -124,23 +121,21 @@ if (isset($_POST['save_preferences'])) {
     }
     
     if (mysqli_query($conn, $sql)) {
-        $message = "Preferences saved successfully! Your meal plans will now be personalized based on these preferences.";
-        $message_type = 'success';
-        $saved_successfully = true;
-        
         // Refresh preferences
         $pref_result = mysqli_query($conn, $pref_query);
         $preferences = mysqli_fetch_assoc($pref_result);
         
         // Add activity log
-        $activity_details = "Updated dietary preferences: $diet_type diet, $meals_per_day meals/day";
+        $activity_details = "Auto-saved dietary preferences: $diet_type diet, $meals_per_day meals/day";
         $activity_query = "INSERT INTO user_activity (user_id, activity_type, activity_details) 
                            VALUES ($user_id, 'preferences_updated', '$activity_details')";
         mysqli_query($conn, $activity_query);
+        
+        echo json_encode(['success' => true, 'message' => 'Preferences auto-saved']);
     } else {
-        $message = "Error saving preferences: " . mysqli_error($conn);
-        $message_type = 'error';
+        echo json_encode(['success' => false, 'message' => 'Error saving preferences']);
     }
+    exit();
 }
 ?>
 
@@ -562,6 +557,30 @@ if (isset($_POST['save_preferences'])) {
             line-height: 1.4;
         }
         
+        /* Auto-save notification */
+        .auto-save-notification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            background: var(--primary-green);
+            color: white;
+            padding: 12px 20px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(20px);
+            transition: all 0.3s;
+        }
+        
+        .auto-save-notification.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        
         /* Messages */
         .message {
             padding: 15px;
@@ -746,60 +765,6 @@ if (isset($_POST['save_preferences'])) {
             border-radius: 5px;
             transition: width 0.5s ease-in-out;
         }
-        
-        /* Save Confirmation Animation */
-        .save-confirmation {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: var(--primary-green);
-            color: white;
-            padding: 15px 25px;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            z-index: 1000;
-            animation: slideInRight 0.5s ease-out, fadeOut 0.5s ease-in 2.5s forwards;
-        }
-        
-        @keyframes slideInRight {
-            from {
-                transform: translateX(100%);
-                opacity: 0;
-            }
-            to {
-                transform: translateX(0);
-                opacity: 1;
-            }
-        }
-        
-        @keyframes fadeOut {
-            to {
-                opacity: 0;
-                transform: translateX(100%);
-            }
-        }
-        
-        /* Diet Type Info Panel */
-        .diet-info-panel {
-            position: absolute;
-            top: 50px;
-            left: 0;
-            right: 0;
-            background: white;
-            border: 1px solid var(--border-color);
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
-            z-index: 100;
-            display: none;
-        }
-        
-        .pref-option:hover .diet-info-panel {
-            display: block;
-        }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 </head>
@@ -833,6 +798,7 @@ if (isset($_POST['save_preferences'])) {
                 <li><a href="shopping-list.php"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
                 <li><a href="budget.php"><i class="fas fa-wallet"></i> Budget Tracker</a></li>
                 <li><a href="preferences.php" class="active"><i class="fas fa-sliders-h"></i> My Preferences</a></li>
+                <li><a href="create-plan.php"><i class="fas fa-magic"></i> Generate Plan</a></li>
                 <li><a href="profile.php"><i class="fas fa-user"></i> My Profile</a></li>
                 <li><a href="logout.php"><i class="fas fa-sign-out-alt"></i> Logout</a></li>
             </ul>
@@ -847,39 +813,17 @@ if (isset($_POST['save_preferences'])) {
                     <p>Customize your meal planning experience</p>
                 </div>
                 <div class="header-actions">
-                    <a href="budget.php" class="btn btn-primary">
-                        <i class="fas fa-arrow-right"></i> Continue to Budget
+                    <a href="create-plan.php" class="btn btn-primary">
+                        <i class="fas fa-magic"></i> Generate Meal Plan
                     </a>
                 </div>
             </div>
             
-            <!-- Save Confirmation -->
-            <?php if ($saved_successfully): ?>
-                <div class="save-confirmation">
-                    <i class="fas fa-check-circle" style="font-size: 24px;"></i>
-                    <div>
-                        <strong>Preferences Saved!</strong>
-                        <p style="font-size: 12px; margin-top: 5px;">Your settings have been updated</p>
-                    </div>
-                </div>
-            <?php endif; ?>
-            
-            <!-- Messages -->
-            <?php if ($message): ?>
-                <div class="message <?php echo $message_type; ?>">
-                    <div class="message-icon">
-                        <?php if ($message_type == 'success'): ?>
-                            <i class="fas fa-check-circle"></i>
-                        <?php else: ?>
-                            <i class="fas fa-exclamation-triangle"></i>
-                        <?php endif; ?>
-                    </div>
-                    <div class="message-content">
-                        <strong><?php echo $message_type == 'success' ? 'Success!' : 'Error!'; ?></strong>
-                        <?php echo htmlspecialchars($message); ?>
-                    </div>
-                </div>
-            <?php endif; ?>
+            <!-- Auto-save Notification -->
+            <div class="auto-save-notification" id="autoSaveNotification">
+                <i class="fas fa-check-circle"></i>
+                <span>Preferences auto-saved!</span>
+            </div>
             
             <!-- Progress Bar -->
             <div class="progress-container">
@@ -935,6 +879,9 @@ if (isset($_POST['save_preferences'])) {
                                     <i class="fas fa-check"></i> Preferences saved
                                 </p>
                             <?php endif; ?>
+                            <p style="font-size: 11px; color: var(--text-light); margin-top: 5px;">
+                                <i class="fas fa-sync"></i> Auto-saves as you make changes
+                            </p>
                         </div>
                     </div>
                     
@@ -964,13 +911,16 @@ if (isset($_POST['save_preferences'])) {
                             <div class="step-status">
                                 <span class="badge badge-warning">Pending</span>
                             </div>
+                            <a href="create-plan.php" class="btn btn-outline" style="margin-top: 10px;">
+                                Next: Generate Plan
+                            </a>
                         </div>
                     </div>
                 </div>
             </div>
             
             <!-- Preferences Form -->
-            <form method="POST" action="">
+            <div id="preferencesForm">
                 <div class="content-section">
                     <div class="section-header">
                         <h2>Dietary Preferences</h2>
@@ -1251,7 +1201,7 @@ if (isset($_POST['save_preferences'])) {
                     <div class="form-row">
                         <div class="form-group">
                             <label for="cuisine_pref">Cuisine Preference</label>
-                            <select id="cuisine_pref" name="cuisine_pref" class="form-control">
+                            <select id="cuisine_pref" name="cuisine_pref" class="form-control" onchange="autoSavePreferences()">
                                 <option value="Kenyan" <?php echo ($preferences['cuisine_pref'] ?? 'Kenyan') == 'Kenyan' ? 'selected' : ''; ?>>Kenyan Traditional</option>
                                 <option value="Continental" <?php echo ($preferences['cuisine_pref'] ?? '') == 'Continental' ? 'selected' : ''; ?>>Continental</option>
                                 <option value="Fusion" <?php echo ($preferences['cuisine_pref'] ?? '') == 'Fusion' ? 'selected' : ''; ?>>Fusion</option>
@@ -1261,7 +1211,7 @@ if (isset($_POST['save_preferences'])) {
                         
                         <div class="form-group">
                             <label for="spicy_level">Spice Level</label>
-                            <select id="spicy_level" name="spicy_level" class="form-control">
+                            <select id="spicy_level" name="spicy_level" class="form-control" onchange="autoSavePreferences()">
                                 <option value="Mild" <?php echo ($preferences['spicy_level'] ?? 'Medium') == 'Mild' ? 'selected' : ''; ?>>Mild</option>
                                 <option value="Medium" <?php echo ($preferences['spicy_level'] ?? 'Medium') == 'Medium' ? 'selected' : ''; ?>>Medium</option>
                                 <option value="Spicy" <?php echo ($preferences['spicy_level'] ?? '') == 'Spicy' ? 'selected' : ''; ?>>Spicy</option>
@@ -1273,7 +1223,7 @@ if (isset($_POST['save_preferences'])) {
                     <div class="form-row">
                         <div class="form-group">
                             <label for="cooking_time">Preferred Cooking Time</label>
-                            <select id="cooking_time" name="cooking_time" class="form-control">
+                            <select id="cooking_time" name="cooking_time" class="form-control" onchange="autoSavePreferences()">
                                 <option value="Quick (<30 min)" <?php echo ($preferences['cooking_time'] ?? '30-45 minutes') == 'Quick (<30 min)' ? 'selected' : ''; ?>>Quick (&lt;30 minutes)</option>
                                 <option value="30-45 minutes" <?php echo ($preferences['cooking_time'] ?? '30-45 minutes') == '30-45 minutes' ? 'selected' : ''; ?>>30-45 minutes</option>
                                 <option value="45-60 minutes" <?php echo ($preferences['cooking_time'] ?? '') == '45-60 minutes' ? 'selected' : ''; ?>>45-60 minutes</option>
@@ -1283,7 +1233,7 @@ if (isset($_POST['save_preferences'])) {
                         
                         <div class="form-group">
                             <label for="meals_per_day">Meals Per Day</label>
-                            <select id="meals_per_day" name="meals_per_day" class="form-control">
+                            <select id="meals_per_day" name="meals_per_day" class="form-control" onchange="autoSavePreferences()">
                                 <option value="2" <?php echo ($preferences['meals_per_day'] ?? 3) == 2 ? 'selected' : ''; ?>>2 Meals (Breakfast & Dinner)</option>
                                 <option value="3" <?php echo ($preferences['meals_per_day'] ?? 3) == 3 ? 'selected' : ''; ?>>3 Meals (Standard)</option>
                                 <option value="4" <?php echo ($preferences['meals_per_day'] ?? 3) == 4 ? 'selected' : ''; ?>>4 Meals (With Snack)</option>
@@ -1306,37 +1256,37 @@ if (isset($_POST['save_preferences'])) {
                                 <h4><i class="fas fa-ban"></i> Avoid These Foods</h4>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_pork" name="avoid_pork" value="1" 
-                                           <?php echo ($preferences['avoid_pork'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_pork'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_pork">Pork</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_beef" name="avoid_beef" value="1" 
-                                           <?php echo ($preferences['avoid_beef'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_beef'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_beef">Beef</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_fish" name="avoid_fish" value="1" 
-                                           <?php echo ($preferences['avoid_fish'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_fish'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_fish">Fish & Seafood</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_dairy" name="avoid_dairy" value="1" 
-                                           <?php echo ($preferences['avoid_dairy'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_dairy'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_dairy">Dairy Products</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_gluten" name="avoid_gluten" value="1" 
-                                           <?php echo ($preferences['avoid_gluten'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_gluten'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_gluten">Gluten (Wheat, Barley)</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_nuts" name="avoid_nuts" value="1" 
-                                           <?php echo ($preferences['avoid_nuts'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_nuts'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_nuts">Nuts</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="avoid_eggs" name="avoid_eggs" value="1" 
-                                           <?php echo ($preferences['avoid_eggs'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['avoid_eggs'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="avoid_eggs">Eggs</label>
                                 </div>
                             </div>
@@ -1347,37 +1297,37 @@ if (isset($_POST['save_preferences'])) {
                                 <h4><i class="fas fa-heartbeat"></i> Special Diets</h4>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="vegetarian" name="vegetarian" value="1" 
-                                           <?php echo ($preferences['vegetarian'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['vegetarian'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="vegetarian">Vegetarian (No meat)</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="vegan" name="vegan" value="1" 
-                                           <?php echo ($preferences['vegan'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['vegan'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="vegan">Vegan (No animal products)</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="low_carb" name="low_carb" value="1" 
-                                           <?php echo ($preferences['low_carb'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['low_carb'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="low_carb">Low Carbohydrate</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="low_fat" name="low_fat" value="1" 
-                                           <?php echo ($preferences['low_fat'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['low_fat'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="low_fat">Low Fat</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="low_sodium" name="low_sodium" value="1" 
-                                           <?php echo ($preferences['low_sodium'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['low_sodium'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="low_sodium">Low Sodium</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="sugar_free" name="sugar_free" value="1" 
-                                           <?php echo ($preferences['sugar_free'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['sugar_free'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="sugar_free">Sugar Free / Diabetic</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="high_protein" name="high_protein" value="1" 
-                                           <?php echo ($preferences['high_protein'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['high_protein'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="high_protein">High Protein</label>
                                 </div>
                             </div>
@@ -1388,27 +1338,27 @@ if (isset($_POST['save_preferences'])) {
                                 <h4><i class="fas fa-stethoscope"></i> Medical Conditions</h4>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="diabetic" name="diabetic" value="1" 
-                                           <?php echo ($preferences['diabetic'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['diabetic'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="diabetic">Diabetes</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="hypertension" name="hypertension" value="1" 
-                                           <?php echo ($preferences['hypertension'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['hypertension'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="hypertension">High Blood Pressure</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="cholesterol" name="cholesterol" value="1" 
-                                           <?php echo ($preferences['cholesterol'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['cholesterol'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="cholesterol">High Cholesterol</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="pregnancy" name="pregnancy" value="1" 
-                                           <?php echo ($preferences['pregnancy'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['pregnancy'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="pregnancy">Pregnancy</label>
                                 </div>
                                 <div class="checkbox-group">
                                     <input type="checkbox" id="lactose" name="lactose" value="1" 
-                                           <?php echo ($preferences['lactose'] ?? 0) ? 'checked' : ''; ?>>
+                                           <?php echo ($preferences['lactose'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                                     <label for="lactose">Lactose Intolerant</label>
                                 </div>
                             </div>
@@ -1426,7 +1376,7 @@ if (isset($_POST['save_preferences'])) {
                     <div class="preferences-grid">
                         <div class="pref-option <?php echo ($preferences['pref_breakfast'] ?? 1) ? 'selected' : ''; ?>" onclick="toggleMealPref(this, 'breakfast')">
                             <input type="checkbox" id="pref_breakfast" name="pref_breakfast" value="1" 
-                                   <?php echo ($preferences['pref_breakfast'] ?? 1) ? 'checked' : ''; ?>>
+                                   <?php echo ($preferences['pref_breakfast'] ?? 1) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                             <label for="pref_breakfast">
                                 <i class="fas fa-egg"></i>
                                 <div>
@@ -1440,7 +1390,7 @@ if (isset($_POST['save_preferences'])) {
                         
                         <div class="pref-option <?php echo ($preferences['pref_lunch'] ?? 1) ? 'selected' : ''; ?>" onclick="toggleMealPref(this, 'lunch')">
                             <input type="checkbox" id="pref_lunch" name="pref_lunch" value="1" 
-                                   <?php echo ($preferences['pref_lunch'] ?? 1) ? 'checked' : ''; ?>>
+                                   <?php echo ($preferences['pref_lunch'] ?? 1) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                             <label for="pref_lunch">
                                 <i class="fas fa-hamburger"></i>
                                 <div>
@@ -1454,7 +1404,7 @@ if (isset($_POST['save_preferences'])) {
                         
                         <div class="pref-option <?php echo ($preferences['pref_dinner'] ?? 1) ? 'selected' : ''; ?>" onclick="toggleMealPref(this, 'dinner')">
                             <input type="checkbox" id="pref_dinner" name="pref_dinner" value="1" 
-                                   <?php echo ($preferences['pref_dinner'] ?? 1) ? 'checked' : ''; ?>>
+                                   <?php echo ($preferences['pref_dinner'] ?? 1) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                             <label for="pref_dinner">
                                 <i class="fas fa-utensils"></i>
                                 <div>
@@ -1468,7 +1418,7 @@ if (isset($_POST['save_preferences'])) {
                         
                         <div class="pref-option <?php echo ($preferences['pref_snacks'] ?? 0) ? 'selected' : ''; ?>" onclick="toggleMealPref(this, 'snacks')">
                             <input type="checkbox" id="pref_snacks" name="pref_snacks" value="1" 
-                                   <?php echo ($preferences['pref_snacks'] ?? 0) ? 'checked' : ''; ?>>
+                                   <?php echo ($preferences['pref_snacks'] ?? 0) ? 'checked' : ''; ?> onchange="autoSavePreferences()">
                             <label for="pref_snacks">
                                 <i class="fas fa-apple-alt"></i>
                                 <div>
@@ -1482,19 +1432,16 @@ if (isset($_POST['save_preferences'])) {
                     </div>
                 </div>
                 
-                <!-- Form Actions -->
+                <!-- Continue Button -->
                 <div class="content-section" style="text-align: center; background: var(--light-green);">
-                    <button type="submit" name="save_preferences" class="btn btn-primary btn-lg" onclick="showSaveAnimation()">
-                        <i class="fas fa-save"></i> Save Preferences
-                    </button>
-                    <a href="budget.php" class="btn btn-outline btn-lg" style="margin-left: 15px;">
-                        <i class="fas fa-arrow-right"></i> Skip to Budget
+                    <a href="create-plan.php" class="btn btn-primary btn-lg">
+                        <i class="fas fa-magic"></i> Generate My Meal Plan
                     </a>
                     <p style="color: var(--text-light); font-size: 14px; margin-top: 15px;">
-                        Your preferences will be used to generate personalized meal plans
+                        Your preferences are automatically saved. Click to generate your personalized meal plan.
                     </p>
                 </div>
-            </form>
+            </div>
         </main>
     </div>
     
@@ -1515,8 +1462,8 @@ if (isset($_POST['save_preferences'])) {
         const radioId = 'diet_' + type;
         document.getElementById(radioId).checked = true;
         
-        // Show save reminder
-        showSaveReminder();
+        // Auto-save preferences
+        autoSavePreferences();
     }
     
     // Toggle meal preference function
@@ -1530,35 +1477,108 @@ if (isset($_POST['save_preferences'])) {
             element.classList.remove('selected');
         }
         
-        // Show save reminder
-        showSaveReminder();
+        // Auto-save preferences
+        autoSavePreferences();
     }
     
-    // Show save reminder
-    function showSaveReminder() {
-        const saveBtn = document.querySelector('button[name="save_preferences"]');
-        if (saveBtn) {
-            saveBtn.innerHTML = '<i class="fas fa-exclamation-circle"></i> Save Changes';
-            saveBtn.style.background = 'var(--accent-orange)';
-        }
-    }
-    
-    // Show save animation
-    function showSaveAnimation() {
-        const saveBtn = document.querySelector('button[name="save_preferences"]');
-        if (saveBtn) {
-            saveBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-            saveBtn.disabled = true;
+    // Collect all preferences and auto-save
+    function collectPreferences() {
+        const preferences = {
+            // Diet type
+            diet_type: document.querySelector('input[name="diet_type"]:checked')?.value || 'Balanced',
             
-            // Reset button after 2 seconds
-            setTimeout(() => {
-                if (!<?php echo $saved_successfully ? 'true' : 'false'; ?>) {
-                    saveBtn.innerHTML = '<i class="fas fa-save"></i> Save Preferences';
-                    saveBtn.disabled = false;
-                    saveBtn.style.background = '';
+            // Basic preferences
+            cuisine_pref: document.getElementById('cuisine_pref').value,
+            spicy_level: document.getElementById('spicy_level').value,
+            cooking_time: document.getElementById('cooking_time').value,
+            meals_per_day: document.getElementById('meals_per_day').value,
+            
+            // Dietary restrictions
+            avoid_pork: document.getElementById('avoid_pork').checked ? 1 : 0,
+            avoid_beef: document.getElementById('avoid_beef').checked ? 1 : 0,
+            avoid_fish: document.getElementById('avoid_fish').checked ? 1 : 0,
+            avoid_dairy: document.getElementById('avoid_dairy').checked ? 1 : 0,
+            avoid_gluten: document.getElementById('avoid_gluten').checked ? 1 : 0,
+            avoid_nuts: document.getElementById('avoid_nuts').checked ? 1 : 0,
+            avoid_eggs: document.getElementById('avoid_eggs').checked ? 1 : 0,
+            
+            // Special diets
+            vegetarian: document.getElementById('vegetarian').checked ? 1 : 0,
+            vegan: document.getElementById('vegan').checked ? 1 : 0,
+            low_carb: document.getElementById('low_carb').checked ? 1 : 0,
+            low_fat: document.getElementById('low_fat').checked ? 1 : 0,
+            low_sodium: document.getElementById('low_sodium').checked ? 1 : 0,
+            sugar_free: document.getElementById('sugar_free').checked ? 1 : 0,
+            high_protein: document.getElementById('high_protein').checked ? 1 : 0,
+            
+            // Medical conditions
+            diabetic: document.getElementById('diabetic').checked ? 1 : 0,
+            hypertension: document.getElementById('hypertension').checked ? 1 : 0,
+            cholesterol: document.getElementById('cholesterol').checked ? 1 : 0,
+            pregnancy: document.getElementById('pregnancy').checked ? 1 : 0,
+            lactose: document.getElementById('lactose').checked ? 1 : 0,
+            
+            // Meal preferences
+            pref_breakfast: document.getElementById('pref_breakfast').checked ? 1 : 0,
+            pref_lunch: document.getElementById('pref_lunch').checked ? 1 : 0,
+            pref_dinner: document.getElementById('pref_dinner').checked ? 1 : 0,
+            pref_snacks: document.getElementById('pref_snacks').checked ? 1 : 0
+        };
+        
+        return preferences;
+    }
+    
+    // Auto-save preferences via AJAX
+    let autoSaveTimeout;
+    function autoSavePreferences() {
+        // Clear any existing timeout
+        clearTimeout(autoSaveTimeout);
+        
+        // Set new timeout to save after 1 second of no changes
+        autoSaveTimeout = setTimeout(() => {
+            const preferences = collectPreferences();
+            
+            // Show saving indicator
+            const notification = document.getElementById('autoSaveNotification');
+            notification.querySelector('i').className = 'fas fa-spinner fa-spin';
+            notification.querySelector('span').textContent = 'Saving preferences...';
+            notification.classList.add('show');
+            
+            // Send AJAX request
+            fetch('preferences.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'ajax_save=true&preferences_data=' + encodeURIComponent(JSON.stringify(preferences))
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    notification.querySelector('i').className = 'fas fa-check-circle';
+                    notification.querySelector('span').textContent = 'Preferences saved!';
+                    
+                    // Update workflow step
+                    document.querySelector('.step:nth-child(2) .badge-warning').textContent = '✓ Completed';
+                    document.querySelector('.step:nth-child(2) .badge-warning').className = 'badge badge-success';
+                } else {
+                    notification.querySelector('i').className = 'fas fa-exclamation-triangle';
+                    notification.querySelector('span').textContent = 'Error saving preferences';
                 }
-            }, 2000);
-        }
+                
+                // Hide notification after 3 seconds
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                }, 3000);
+            })
+            .catch(error => {
+                notification.querySelector('i').className = 'fas fa-exclamation-triangle';
+                notification.querySelector('span').textContent = 'Error saving preferences';
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                }, 3000);
+            });
+        }, 1000); // 1 second delay
     }
     
     // Initialize on page load
@@ -1572,10 +1592,13 @@ if (isset($_POST['save_preferences'])) {
             }
         }
         
-        // Auto-save reminder when form changes
+        // Add change listeners to all form elements
         const formInputs = document.querySelectorAll('input, select, textarea');
         formInputs.forEach(input => {
-            input.addEventListener('change', showSaveReminder);
+            // Skip if already has onchange handler
+            if (!input.onchange) {
+                input.addEventListener('change', autoSavePreferences);
+            }
         });
         
         // Check if preferences are already saved

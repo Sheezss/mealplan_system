@@ -273,6 +273,32 @@ $active_budget = null;
 if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
     $active_budget = mysqli_fetch_assoc($active_budget_result);
 }
+
+// 12. Get user's nutrition goals
+$nutrition_goals = [
+    'daily_calories' => 2000,
+    'daily_protein' => 50.00,
+    'daily_carbs' => 250.00,
+    'daily_fats' => 65.00
+];
+
+$goals_query = "SELECT * FROM nutrition_goals WHERE user_id = $user_id";
+$goals_result = mysqli_query($conn, $goals_query);
+if ($goals_result && mysqli_num_rows($goals_result) > 0) {
+    $nutrition_goals = mysqli_fetch_assoc($goals_result);
+}
+
+// 13. Calculate today's nutrition percentages
+$nutrition_percentages = [
+    'calories' => $nutrition_goals['daily_calories'] > 0 ? 
+                 min(100, ($nutrition['total_calories'] / $nutrition_goals['daily_calories']) * 100) : 0,
+    'protein' => $nutrition_goals['daily_protein'] > 0 ? 
+                 min(100, ($nutrition['total_protein'] / $nutrition_goals['daily_protein']) * 100) : 0,
+    'carbs' => $nutrition_goals['daily_carbs'] > 0 ? 
+               min(100, ($nutrition['total_carbs'] / $nutrition_goals['daily_carbs']) * 100) : 0,
+    'fats' => $nutrition_goals['daily_fats'] > 0 ? 
+              min(100, ($nutrition['total_fats'] / $nutrition_goals['daily_fats']) * 100) : 0
+];
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -600,6 +626,12 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
         }
         .stat-icon.budget-total {
             background: linear-gradient(135deg, #2ecc71, #27ae60);
+        }
+        .stat-icon.nutrition {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        }
+        .stat-icon.goals {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
         }
         .stat-info h3 {
             font-size: 24px;
@@ -1013,6 +1045,46 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
             margin-bottom: 15px;
             color: var(--dark-green);
         }
+        /* Nutrition Summary Styles */
+        .content-section {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.05);
+            border: 1px solid var(--border-color);
+            margin-bottom: 30px;
+        }
+        
+        .progress-indicator {
+            height: 8px;
+            background: var(--border-color);
+            border-radius: 4px;
+            margin: 5px 0;
+            overflow: hidden;
+        }
+        
+        .progress-indicator .fill {
+            height: 100%;
+            border-radius: 4px;
+        }
+        
+        .nutrition-tips {
+            background: #fff3cd;
+            border-left: 4px solid #f39c12;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            font-size: 14px;
+        }
+        
+        .nutrition-tips ul {
+            margin: 10px 0 0 20px;
+            color: #856404;
+        }
+        
+        .nutrition-tips li {
+            margin-bottom: 5px;
+        }
         /* Responsive */
         @media (max-width: 1200px) {
             .dashboard-grid {
@@ -1082,6 +1154,7 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
                 <li><a href="recipes.php"><i class="fas fa-book"></i> Kenyan Recipes</a></li>
                 <li><a href="shopping-list.php"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
                 <li><a href="budget.php"><i class="fas fa-wallet"></i> Budget Tracker</a></li>
+                <li><a href="nutrition-summary.php"><i class="fas fa-chart-pie"></i> Nutrition Summary</a></li>
                 <li><a href="preferences.php"><i class="fas fa-sliders-h"></i> My Preferences</a></li>
                 <li><a href="create-plan.php"><i class="fas fa-magic"></i> Generate Plan</a></li>
                 <li><a href="profile.php"><i class="fas fa-user"></i> My Profile</a></li>
@@ -1229,6 +1302,234 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
             </div>
             <?php endif; ?>
             
+            <!-- Nutrition Summary Section -->
+            <?php if (!empty($nutrition_goals)): ?>
+            <div class="content-section" style="margin-bottom: 30px;">
+                <h3 style="color: var(--dark-green); margin-bottom: 20px;">
+                    <i class="fas fa-chart-pie"></i> Today's Nutrition Summary
+                </h3>
+                
+                <div class="stats-grid">
+                    <!-- Calories Card -->
+                    <div class="stat-card">
+                        <div class="stat-icon nutrition" style="background: linear-gradient(135deg, #e74c3c, #c0392b);">
+                            <i class="fas fa-fire"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3><?php echo round($nutrition['total_calories']); ?></h3>
+                            <p>Calories Today</p>
+                            <?php if ($nutrition_goals['daily_calories'] > 0): ?>
+                                <small style="color: <?php 
+                                    echo ($nutrition['total_calories'] / $nutrition_goals['daily_calories'] * 100) > 80 ? '#e74c3c' : 
+                                         (($nutrition['total_calories'] / $nutrition_goals['daily_calories'] * 100) > 60 ? '#f39c12' : '#27ae60'); 
+                                ?>; font-size: 12px;">
+                                    <?php echo round(($nutrition['total_calories'] / $nutrition_goals['daily_calories']) * 100, 1); ?>% of daily goal
+                                </small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <!-- Protein Card -->
+                    <div class="stat-card">
+                        <div class="stat-icon nutrition" style="background: linear-gradient(135deg, #3498db, #2980b9);">
+                            <i class="fas fa-drumstick-bite"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3><?php echo round($nutrition['total_protein']); ?>g</h3>
+                            <p>Protein Today</p>
+                            <?php if ($nutrition_goals['daily_protein'] > 0): ?>
+                                <small style="color: #3498db; font-size: 12px;">
+                                    <?php echo round(($nutrition['total_protein'] / $nutrition_goals['daily_protein']) * 100, 1); ?>% of daily goal
+                                </small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <!-- Carbs Card -->
+                    <div class="stat-card">
+                        <div class="stat-icon nutrition" style="background: linear-gradient(135deg, #f39c12, #e67e22);">
+                            <i class="fas fa-bread-slice"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3><?php echo round($nutrition['total_carbs']); ?>g</h3>
+                            <p>Carbs Today</p>
+                            <?php if ($nutrition_goals['daily_carbs'] > 0): ?>
+                                <small style="color: #f39c12; font-size: 12px;">
+                                    <?php echo round(($nutrition['total_carbs'] / $nutrition_goals['daily_carbs']) * 100, 1); ?>% of daily goal
+                                </small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    
+                    <!-- Fats Card -->
+                    <div class="stat-card">
+                        <div class="stat-icon nutrition" style="background: linear-gradient(135deg, #9b59b6, #8e44ad);">
+                            <i class="fas fa-oil-can"></i>
+                        </div>
+                        <div class="stat-info">
+                            <h3><?php echo round($nutrition['total_fats']); ?>g</h3>
+                            <p>Fats Today</p>
+                            <?php if ($nutrition_goals['daily_fats'] > 0): ?>
+                                <small style="color: #9b59b6; font-size: 12px;">
+                                    <?php echo round(($nutrition['total_fats'] / $nutrition_goals['daily_fats']) * 100, 1); ?>% of daily goal
+                                </small>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Nutrition Progress Bars -->
+                <div style="background: var(--light-bg); padding: 20px; border-radius: 10px; margin-top: 20px;">
+                    <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                        <span style="color: var(--text-dark); font-weight: 500;">Nutrition Progress vs Goals</span>
+                        <a href="nutrition-summary.php" style="font-size: 13px; color: var(--primary-green); text-decoration: none;">
+                            <i class="fas fa-chart-line"></i> View Detailed Report
+                        </a>
+                    </div>
+                    
+                    <!-- Calories Progress -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px;">
+                            <span>Calories</span>
+                            <span>
+                                <?php 
+                                $calorie_percent = $nutrition_goals['daily_calories'] > 0 ? 
+                                                  min(100, ($nutrition['total_calories'] / $nutrition_goals['daily_calories']) * 100) : 0;
+                                echo round($nutrition['total_calories']) . ' / ' . $nutrition_goals['daily_calories'] . ' (' . round($calorie_percent, 1) . '%)';
+                                ?>
+                            </span>
+                        </div>
+                        <div class="progress-indicator">
+                            <div class="fill" style="width: <?php echo $calorie_percent; ?>%; 
+                                                     background: <?php 
+                                                         echo $calorie_percent > 80 ? '#e74c3c' : 
+                                                              ($calorie_percent > 60 ? '#f39c12' : '#27ae60'); 
+                                                     ?>;">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Protein Progress -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px;">
+                            <span>Protein</span>
+                            <span>
+                                <?php 
+                                $protein_percent = $nutrition_goals['daily_protein'] > 0 ? 
+                                                  min(100, ($nutrition['total_protein'] / $nutrition_goals['daily_protein']) * 100) : 0;
+                                echo round($nutrition['total_protein'], 1) . 'g / ' . $nutrition_goals['daily_protein'] . 'g (' . round($protein_percent, 1) . '%)';
+                                ?>
+                            </span>
+                        </div>
+                        <div class="progress-indicator">
+                            <div class="fill" style="width: <?php echo $protein_percent; ?>%; background: #3498db;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Carbs Progress -->
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px;">
+                            <span>Carbs</span>
+                            <span>
+                                <?php 
+                                $carbs_percent = $nutrition_goals['daily_carbs'] > 0 ? 
+                                                min(100, ($nutrition['total_carbs'] / $nutrition_goals['daily_carbs']) * 100) : 0;
+                                echo round($nutrition['total_carbs'], 1) . 'g / ' . $nutrition_goals['daily_carbs'] . 'g (' . round($carbs_percent, 1) . '%)';
+                                ?>
+                            </span>
+                        </div>
+                        <div class="progress-indicator">
+                            <div class="fill" style="width: <?php echo $carbs_percent; ?>%; background: #f39c12;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Fats Progress -->
+                    <div>
+                        <div style="display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 5px;">
+                            <span>Fats</span>
+                            <span>
+                                <?php 
+                                $fats_percent = $nutrition_goals['daily_fats'] > 0 ? 
+                                               min(100, ($nutrition['total_fats'] / $nutrition_goals['daily_fats']) * 100) : 0;
+                                echo round($nutrition['total_fats'], 1) . 'g / ' . $nutrition_goals['daily_fats'] . 'g (' . round($fats_percent, 1) . '%)';
+                                ?>
+                            </span>
+                        </div>
+                        <div class="progress-indicator">
+                            <div class="fill" style="width: <?php echo $fats_percent; ?>%; background: #9b59b6;"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Nutrition Tips -->
+                    <?php 
+                    $tips = [];
+                    if ($nutrition_percentages['protein'] < 70) {
+                        $tips[] = "Consider adding more protein-rich foods like beans, eggs, or chicken";
+                    }
+                    if ($nutrition_percentages['calories'] > 120) {
+                        $tips[] = "You've exceeded your calorie goal for today";
+                    } elseif ($nutrition_percentages['calories'] < 50) {
+                        $tips[] = "You're below your calorie target. Add a healthy snack!";
+                    }
+                    if ($nutrition_percentages['carbs'] > 120) {
+                        $tips[] = "Consider balancing your carbs with more vegetables and protein";
+                    }
+                    if (empty($tips)) {
+                        $tips[] = "Great job! Your nutrition is well-balanced today";
+                    }
+                    
+                    if (!empty($tips)): ?>
+                    <div class="nutrition-tips">
+                        <strong><i class="fas fa-lightbulb"></i> Nutrition Tips:</strong>
+                        <ul>
+                            <?php foreach ($tips as $tip): ?>
+                                <li><?php echo htmlspecialchars($tip); ?></li>
+                            <?php endforeach; ?>
+                        </ul>
+                    </div>
+                    <?php endif; ?>
+                </div>
+                
+                <!-- Nutrition Goals -->
+                <div style="background: white; padding: 20px; border-radius: 10px; border: 1px solid var(--border-color); margin-top: 20px;">
+                    <h4 style="color: var(--dark-green); margin-bottom: 15px;">
+                        <i class="fas fa-bullseye"></i> Your Daily Nutrition Goals
+                    </h4>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px;">
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: var(--primary-green);">
+                                <?php echo $nutrition_goals['daily_calories']; ?>
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-light);">Daily Calories</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: #3498db;">
+                                <?php echo $nutrition_goals['daily_protein']; ?>g
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-light);">Daily Protein</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: #f39c12;">
+                                <?php echo $nutrition_goals['daily_carbs']; ?>g
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-light);">Daily Carbs</div>
+                        </div>
+                        <div style="text-align: center;">
+                            <div style="font-size: 24px; font-weight: bold; color: #9b59b6;">
+                                <?php echo $nutrition_goals['daily_fats']; ?>g
+                            </div>
+                            <div style="font-size: 13px; color: var(--text-light);">Daily Fats</div>
+                        </div>
+                    </div>
+                    <div style="text-align: center; margin-top: 15px;">
+                        <a href="nutrition-summary.php?view=goals" class="btn btn-sm btn-outline" style="display: inline-flex; align-items: center; gap: 5px;">
+                            <i class="fas fa-sliders-h"></i> Adjust Goals
+                        </a>
+                    </div>
+                </div>
+            </div>
+            <?php endif; ?>
+            
             <!-- Plan Generation Stats Section -->
             <div class="content-section" style="margin-bottom: 30px;">
                 <h3 style="color: var(--dark-green); margin-bottom: 20px;">
@@ -1280,7 +1581,7 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
                     
                     <!-- Next Goal Card -->
                     <div class="stat-card">
-                        <div class="stat-icon pantry">
+                        <div class="stat-icon goals">
                             <i class="fas fa-bullseye"></i>
                         </div>
                         <div class="stat-info">
@@ -1520,25 +1821,80 @@ if ($active_budget_result && mysqli_num_rows($active_budget_result) > 0) {
                             <div class="stat-item">
                                 <div class="stat-value"><?php echo round($nutrition['total_calories']); ?></div>
                                 <div class="stat-label">Calories</div>
+                                <?php if (!empty($nutrition_goals) && $nutrition_goals['daily_calories'] > 0): ?>
+                                    <div class="stat-label" style="font-size: 11px; color: <?php 
+                                        echo ($nutrition['total_calories'] / $nutrition_goals['daily_calories'] * 100) > 80 ? '#e74c3c' : 
+                                             (($nutrition['total_calories'] / $nutrition_goals['daily_calories'] * 100) > 60 ? '#f39c12' : '#27ae60'); 
+                                    ?>;">
+                                        <?php echo round(($nutrition['total_calories'] / $nutrition_goals['daily_calories']) * 100, 1); ?>% of goal
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="stat-item">
                                 <div class="stat-value"><?php echo round($nutrition['total_protein']); ?>g</div>
                                 <div class="stat-label">Protein</div>
+                                <?php if (!empty($nutrition_goals) && $nutrition_goals['daily_protein'] > 0): ?>
+                                    <div class="stat-label" style="font-size: 11px; color: #3498db;">
+                                        <?php echo round(($nutrition['total_protein'] / $nutrition_goals['daily_protein']) * 100, 1); ?>% of goal
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="stat-item">
                                 <div class="stat-value"><?php echo round($nutrition['total_carbs']); ?>g</div>
                                 <div class="stat-label">Carbs</div>
+                                <?php if (!empty($nutrition_goals) && $nutrition_goals['daily_carbs'] > 0): ?>
+                                    <div class="stat-label" style="font-size: 11px; color: #f39c12;">
+                                        <?php echo round(($nutrition['total_carbs'] / $nutrition_goals['daily_carbs']) * 100, 1); ?>% of goal
+                                    </div>
+                                <?php endif; ?>
                             </div>
                             <div class="stat-item">
                                 <div class="stat-value"><?php echo round($nutrition['total_fats']); ?>g</div>
                                 <div class="stat-label">Fats</div>
+                                <?php if (!empty($nutrition_goals) && $nutrition_goals['daily_fats'] > 0): ?>
+                                    <div class="stat-label" style="font-size: 11px; color: #9b59b6;">
+                                        <?php echo round(($nutrition['total_fats'] / $nutrition_goals['daily_fats']) * 100, 1); ?>% of goal
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
+                        
+                        <!-- Add a progress bar for calories -->
+                        <?php if (!empty($nutrition_goals) && $nutrition_goals['daily_calories'] > 0): 
+                            $calorie_percent = min(100, ($nutrition['total_calories'] / $nutrition_goals['daily_calories']) * 100);
+                        ?>
+                            <div style="margin-top: 15px;">
+                                <div style="display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 5px;">
+                                    <span>Daily Calories Progress</span>
+                                    <span><?php echo round($calorie_percent, 1); ?>%</span>
+                                </div>
+                                <div style="height: 6px; background: #ecf0f1; border-radius: 3px; overflow: hidden;">
+                                    <div style="height: 100%; width: <?php echo $calorie_percent; ?>%; 
+                                                background: <?php 
+                                                    echo $calorie_percent > 80 ? '#e74c3c' : 
+                                                         ($calorie_percent > 60 ? '#f39c12' : '#27ae60'); 
+                                                ?>; border-radius: 3px;">
+                                    </div>
+                                </div>
+                                <div style="font-size: 11px; color: var(--text-light); margin-top: 5px; text-align: center;">
+                                    <?php echo round($nutrition['total_calories']); ?> / <?php echo $nutrition_goals['daily_calories']; ?> calories
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <!-- Add link to detailed nutrition page -->
+                        <a href="nutrition-summary.php" style="display: block; text-align: center; margin-top: 15px; 
+                                                   font-size: 13px; color: var(--primary-green); text-decoration: none;">
+                            <i class="fas fa-chart-line"></i> View Detailed Nutrition Report
+                        </a>
                     </div>
                     
                     <div class="plan-actions">
                         <a href="create-plan.php" class="plan-btn primary">
                             <i class="fas fa-plus-circle"></i> Create New Plan
+                        </a>
+                        <a href="nutrition-summary.php" class="plan-btn secondary">
+                            <i class="fas fa-chart-line"></i> Nutrition Report
                         </a>
                         <a href="shopping-list.php" class="plan-btn secondary">
                             <i class="fas fa-shopping-cart"></i> Shopping List

@@ -10,16 +10,20 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['full_name'];
 
-// Get shopping list items
-$shopping_query = "SELECT sl.*, fi.name as item_name, fi.category, mp.name as plan_name 
+// Get shopping list items - Updated query
+$shopping_query = "SELECT sl.*, 
+                   COALESCE(fi.name, 'Custom Item') as item_name, 
+                   COALESCE(fi.category, 'Other') as category, 
+                   mp.name as plan_name,
+                   mp.user_id as plan_user_id
                    FROM shopping_lists sl
-                   JOIN food_items fi ON sl.fooditem_id = fi.fooditem_id
+                   LEFT JOIN food_items fi ON sl.fooditem_id = fi.fooditem_id
                    JOIN meal_plans mp ON sl.mealplan_id = mp.mealplan_id
                    WHERE mp.user_id = $user_id AND sl.status != 'Purchased'
-                   ORDER BY sl.status, fi.category, fi.name";
+                   ORDER BY sl.status, COALESCE(fi.category, 'Other'), COALESCE(fi.name, 'Custom Item')";
 $shopping_result = mysqli_query($conn, $shopping_query);
 
-// Get shopping list stats
+// Get shopping list stats - Updated queries
 $stats = [
     'total_items' => 0,
     'pending_items' => 0,
@@ -47,6 +51,18 @@ if ($purchased_result && mysqli_num_rows($purchased_result) > 0) {
     $stats['purchased_items'] = $purchased_data['count'];
 }
 
+// Calculate estimated cost
+$cost_query = "SELECT SUM(sl.quantity_needed * COALESCE(fi.price_per_unit, 50)) as total_cost
+               FROM shopping_lists sl
+               LEFT JOIN food_items fi ON sl.fooditem_id = fi.fooditem_id
+               JOIN meal_plans mp ON sl.mealplan_id = mp.mealplan_id
+               WHERE mp.user_id = $user_id AND sl.status = 'Pending'";
+$cost_result = mysqli_query($conn, $cost_query);
+if ($cost_result && mysqli_num_rows($cost_result) > 0) {
+    $cost_data = mysqli_fetch_assoc($cost_result);
+    $stats['estimated_cost'] = $cost_data['total_cost'] ?? 0;
+}
+
 $stats['total_items'] = $stats['pending_items'] + $stats['purchased_items'];
 
 // Handle mark as purchased
@@ -70,7 +86,9 @@ if (isset($_POST['delete_item'])) {
 
 // Handle clear purchased
 if (isset($_POST['clear_purchased'])) {
-    $clear_query = "DELETE FROM shopping_lists WHERE status = 'Purchased'";
+    $clear_query = "DELETE sl FROM shopping_lists sl
+                    JOIN meal_plans mp ON sl.mealplan_id = mp.mealplan_id
+                    WHERE mp.user_id = $user_id AND sl.status = 'Purchased'";
     mysqli_query($conn, $clear_query);
     header("Location: shopping-list.php");
     exit();
@@ -716,10 +734,13 @@ if (isset($_POST['clear_purchased'])) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($category_items as $item): ?>
+                                    <?php foreach ($category_items as $item): 
+                                        // Debug output (remove in production)
+                                        // echo "<!-- Debug: " . print_r($item, true) . " -->";
+                                    ?>
                                         <tr class="<?php echo $item['status'] == 'Purchased' ? 'purchased' : ''; ?>">
                                             <td>
-                                                <div class="item-name"><?php echo htmlspecialchars($item['item_name']); ?></div>
+                                                <div class="item-name"><?php echo htmlspecialchars($item['item_name'] ?? 'Custom Item'); ?></div>
                                                 <div class="item-category"><?php echo htmlspecialchars($category); ?></div>
                                             </td>
                                             <td>
@@ -728,7 +749,7 @@ if (isset($_POST['clear_purchased'])) {
                                                 </span>
                                             </td>
                                             <td>
-                                                <div class="item-plan"><?php echo htmlspecialchars($item['plan_name']); ?></div>
+                                                <div class="item-plan"><?php echo htmlspecialchars($item['plan_name'] ?? 'Generated Plan'); ?></div>
                                             </td>
                                             <td>
                                                 <span class="status-badge status-<?php echo strtolower($item['status']); ?>">

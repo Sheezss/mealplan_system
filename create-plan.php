@@ -29,13 +29,22 @@ while ($item = mysqli_fetch_assoc($pantry_result)) {
 }
 $has_pantry = count($pantry_items) > 0;
 
-// Get user preferences
+// Get user preferences - CORRECTED VERSION
 $preferences = [];
 $pref_query = "SELECT * FROM user_preferences WHERE user_id = $user_id";
 $pref_result = mysqli_query($conn, $pref_query);
-if (mysqli_num_rows($pref_result) > 0) {
-    $preferences = mysqli_fetch_assoc($pref_result);
-    $has_preferences = true;
+
+if ($pref_result === false) {
+    error_log("DEBUG: Preferences query failed: " . mysqli_error($conn));
+    $message = "Database error when fetching preferences.";
+    $message_type = 'error';
+} else {
+    if (mysqli_num_rows($pref_result) > 0) {
+        $preferences = mysqli_fetch_assoc($pref_result);
+        $has_preferences = true;
+    } else {
+        error_log("DEBUG: No preferences found for user_id: $user_id");
+    }
 }
 
 // Get current budget
@@ -228,7 +237,7 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
         'meals_per_day_setting' => 0
     ];
     
-    // Get user preferences
+    // Get user preferences with defaults
     $diet_type = $preferences['diet_type'] ?? 'Balanced';
     $meals_per_day = $preferences['meals_per_day'] ?? 3;
     $budget_amount = $budget['amount'] ?? 3000;
@@ -291,8 +300,7 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
             'High-Protein' => ['nyama', 'beef', 'chicken', 'fish', 'beans', 'roast', 'stew', 'egg'],
             'Weight-Management' => ['fruit', 'salad', 'matoke', 'ugali', 'githeri', 'soup', 'vegetable'],
             'Keto' => ['nyama', 'beef', 'chicken', 'fish', 'avocado', 'roast', 'salad'],
-            'Modern-Healthy' => ['fruit', 'salad', 'roast', 'grill', 'steam', 'smoothie'],
-            'Traditional-Kenyan' => ['ugali', 'matoke', 'mukimo', 'githeri', 'chapati', 'pilau']
+            'Modern-Healthy' => ['fruit', 'salad', 'roast', 'grill', 'steam', 'smoothie']
         ];
         
         $allowed_keywords = $diet_mapping[$diet_type] ?? ['ugali', 'pilau', 'githeri', 'chapati'];
@@ -377,10 +385,10 @@ function generatePantryBasedMealPlan($pantry_items, $preferences, $budget, $all_
     
     // Determine which meal types to include based on user preference
     $meal_types_to_include = [];
-    if ($include_breakfast && $meals_per_day >= 1) $meal_types_to_include[] = 'Breakfast';
-    if ($include_lunch && $meals_per_day >= 2) $meal_types_to_include[] = 'Lunch';
-    if ($include_dinner && $meals_per_day >= 3) $meal_types_to_include[] = 'Dinner';
-    if ($include_snacks && $meals_per_day >= 4) $meal_types_to_include[] = 'Snack';
+    if ($include_breakfast) $meal_types_to_include[] = 'Breakfast';
+    if ($include_lunch) $meal_types_to_include[] = 'Lunch';
+    if ($include_dinner) $meal_types_to_include[] = 'Dinner';
+    if ($include_snacks) $meal_types_to_include[] = 'Snack';
     
     // If no specific meal types selected, use default based on meals_per_day
     if (empty($meal_types_to_include)) {
@@ -548,7 +556,12 @@ if (isset($_POST['generate_plan'])) {
         mysqli_query($conn, $track_query);
         
     } else {
-        $message = "Please complete all previous steps first!";
+        $missing = [];
+        if (!$has_pantry) $missing[] = "Pantry Setup";
+        if (!$has_preferences) $missing[] = "Preferences";
+        if (!$has_budget) $missing[] = "Budget";
+        
+        $message = "Please complete the following steps first: " . implode(", ", $missing);
         $message_type = 'error';
     }
 }
@@ -566,16 +579,35 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
     if (mysqli_query($conn, $sql)) {
         $plan_id = mysqli_insert_id($conn);
         
+        // Save shopping list items
         foreach ($generated_plan['shopping_list'] as $item) {
-            $food_query = "SELECT fooditem_id FROM food_items WHERE name LIKE '%{$item['item']}%' LIMIT 1";
+            // Clean the item name for better matching
+            $item_name = mysqli_real_escape_string($conn, $item['item']);
+            
+            // Try to find the food item with better matching
+            $food_query = "SELECT fooditem_id FROM food_items 
+                           WHERE name LIKE '%$item_name%' 
+                           OR name LIKE '%" . strtolower($item_name) . "%'
+                           OR '%$item_name%' LIKE CONCAT('%', name, '%')
+                           LIMIT 1";
             $food_result = mysqli_query($conn, $food_query);
-            $fooditem_id = 0;
-            if ($food_row = mysqli_fetch_assoc($food_result)) {
+            
+            if ($food_result && mysqli_num_rows($food_result) > 0) {
+                $food_row = mysqli_fetch_assoc($food_result);
                 $fooditem_id = $food_row['fooditem_id'];
+            } else {
+                // If food item doesn't exist, create a new one
+                $insert_food = "INSERT INTO food_items (name, category, unit) 
+                                VALUES ('$item_name', 'Other', '{$item['unit']}')";
+                mysqli_query($conn, $insert_food);
+                $fooditem_id = mysqli_insert_id($conn);
             }
             
+            // Insert into shopping list
+            $quantity = floatval($item['quantity']);
+            $unit = mysqli_real_escape_string($conn, $item['unit']);
             $shop_sql = "INSERT INTO shopping_lists (mealplan_id, fooditem_id, quantity_needed, unit, status) 
-                         VALUES ($plan_id, $fooditem_id, {$item['quantity']}, '{$item['unit']}', 'Pending')";
+                         VALUES ($plan_id, $fooditem_id, $quantity, '$unit', 'Pending')";
             mysqli_query($conn, $shop_sql);
         }
         
@@ -591,6 +623,12 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
         $message = "Error saving meal plan: " . mysqli_error($conn);
         $message_type = 'error';
     }
+}
+
+// Handle check again request
+if (isset($_POST['check_again'])) {
+    header("Location: create-plan.php");
+    exit();
 }
 ?>
 <!DOCTYPE html>
@@ -929,7 +967,6 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
             background: var(--accent-red);
         }
         
-        /* Pantry Specific Styles */
         .pantry-highlight {
             background: linear-gradient(135deg, #e8f8f1, #d5f4e6);
             border-radius: 15px;
@@ -1165,7 +1202,7 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
             
             <ul class="nav-menu">
                 <li><a href="dashboard.php"><i class="fas fa-home"></i> Dashboard</a></li>
-                <li><a href="meal-plans.php"><i class="fas fa-calendar-alt"></i> My Meal Plans</a></li>
+                <li><a href="meal_plan.php"><i class="fas fa-calendar-alt"></i> My Meal Plans</a></li>
                 <li><a href="pantry.php"><i class="fas fa-utensils"></i> My Pantry</a></li>
                 <li><a href="recipes.php"><i class="fas fa-book"></i> Kenyan Recipes</a></li>
                 <li><a href="shopping-list.php"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
@@ -1193,6 +1230,19 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
             <?php if ($message): ?>
                 <div class="message <?php echo $message_type; ?>">
                     <?php echo htmlspecialchars($message); ?>
+                    <?php if ($message_type == 'error'): ?>
+                        <div style="font-size: 12px; margin-top: 10px; padding: 10px; background: rgba(0,0,0,0.1); border-radius: 5px;">
+                            <strong>Current Status:</strong><br>
+                            User ID: <?php echo $user_id; ?><br>
+                            Has Pantry: <?php echo $has_pantry ? 'Yes (' . count($pantry_items) . ' items)' : 'No'; ?><br>
+                            Has Preferences: <?php echo $has_preferences ? 'Yes' : 'No'; ?><br>
+                            Has Budget: <?php echo $has_budget ? 'Yes' : 'No'; ?><br>
+                            <?php if ($has_preferences && !empty($preferences)): ?>
+                                Diet Type: <?php echo htmlspecialchars($preferences['diet_type'] ?? 'Not set'); ?><br>
+                                Meals/Day: <?php echo htmlspecialchars($preferences['meals_per_day'] ?? 'Not set'); ?>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
                 </div>
             <?php endif; ?>
             
@@ -1253,11 +1303,19 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
                                 <?php endif; ?>
                             <?php else: ?>
                                 <span class="badge badge-warning">Pending</span>
+                                <p style="font-size: 12px; color: var(--accent-red); margin-top: 5px;">
+                                    <i class="fas fa-exclamation-circle"></i> Click below to set
+                                </p>
                             <?php endif; ?>
                         </div>
-                        <a href="preferences.php" class="btn btn-sm btn-outline" style="margin-top: 15px;">
-                            <?php echo $has_preferences ? 'View Preferences' : 'Set Preferences'; ?>
+                        <a href="preferences.php" class="btn btn-sm <?php echo $has_preferences ? 'btn-outline' : 'btn-primary'; ?>" style="margin-top: 15px;">
+                            <?php echo $has_preferences ? 'View Preferences' : 'Set Preferences Now'; ?>
                         </a>
+                        <?php if (!$has_preferences): ?>
+                            <p style="font-size: 11px; color: var(--text-light); margin-top: 8px;">
+                                Save your preferences first
+                            </p>
+                        <?php endif; ?>
                     </div>
                     
                     <div class="requirement-card <?php echo $has_budget ? 'completed' : 'incomplete'; ?>">
@@ -1301,9 +1359,43 @@ if (isset($_POST['save_plan']) && !empty($generated_plan)) {
                         <p style="color: var(--text-light);">
                             Please complete all three setup steps above to generate your personalized meal plan
                         </p>
+                        <p style="color: var(--text-light); font-size: 12px; margin-top: 15px;">
+                            <strong>Current Status:</strong><br>
+                            Pantry: <?php echo $has_pantry ? '✓ Completed' : '✗ Pending'; ?><br>
+                            Preferences: <?php echo $has_preferences ? '✓ Completed' : '✗ Pending'; ?><br>
+                            Budget: <?php echo $has_budget ? '✓ Completed' : '✗ Pending'; ?>
+                        </p>
                     </div>
                 <?php endif; ?>
             </div>
+            
+            <!-- Troubleshooting Section -->
+            <?php if (!$has_preferences && isset($_SESSION['user_id'])): ?>
+                <div class="content-section" style="background: #fff3cd; border: 2px solid #ffc107;">
+                    <h4 style="color: #856404;">
+                        <i class="fas fa-question-circle"></i> Troubleshooting Preferences
+                    </h4>
+                    <p style="color: #856404; margin-bottom: 15px;">
+                        It seems your preferences are not being detected. Here are some things to try:
+                    </p>
+                    <ol style="color: #856404; padding-left: 20px; margin-bottom: 20px;">
+                        <li>Go to <a href="preferences.php" style="font-weight: bold; color: #856404;">Preferences page</a></li>
+                        <li>Make sure you click "Save Preferences" button</li>
+                        <li>Check that all fields are filled (especially Diet Type)</li>
+                        <li>Return to this page and try again</li>
+                    </ol>
+                    <div style="display: flex; gap: 10px;">
+                        <a href="preferences.php" class="btn btn-warning">
+                            <i class="fas fa-sliders-h"></i> Go to Preferences Page
+                        </a>
+                        <form method="POST" action="" style="display: inline;">
+                            <button type="submit" name="check_again" class="btn btn-outline" style="border-color: #856404; color: #856404;">
+                                <i class="fas fa-sync-alt"></i> Check Again
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            <?php endif; ?>
             
             <?php if (!empty($generated_plan)): ?>
                 <!-- Add summary of user settings -->
