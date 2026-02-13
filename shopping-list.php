@@ -10,20 +10,36 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['full_name'];
 
-// Get shopping list items - Updated query
-$shopping_query = "SELECT sl.*, 
-                   COALESCE(fi.name, 'Custom Item') as item_name, 
-                   COALESCE(fi.category, 'Other') as category, 
-                   mp.name as plan_name,
-                   mp.user_id as plan_user_id
+// Get shopping list items - FIXED QUERY
+$shopping_query = "SELECT 
+                    sl.shoppinglist_id,
+                    sl.mealplan_id,
+                    sl.fooditem_id,
+                    sl.quantity_needed,
+                    sl.unit,
+                    sl.status,
+                    sl.created_at,
+                    COALESCE(fi.name, 'Unknown Item') as item_name,
+                    COALESCE(fi.category, 'Other') as category,
+                    mp.name as plan_name,
+                    mp.mealplan_id,
+                    mp.user_id
                    FROM shopping_lists sl
                    LEFT JOIN food_items fi ON sl.fooditem_id = fi.fooditem_id
                    JOIN meal_plans mp ON sl.mealplan_id = mp.mealplan_id
-                   WHERE mp.user_id = $user_id AND sl.status != 'Purchased'
-                   ORDER BY sl.status, COALESCE(fi.category, 'Other'), COALESCE(fi.name, 'Custom Item')";
+                   WHERE mp.user_id = $user_id
+                   ORDER BY 
+                    CASE WHEN sl.status = 'Pending' THEN 1 ELSE 2 END,
+                    COALESCE(fi.category, 'Other'), 
+                    COALESCE(fi.name, 'Unknown Item')";
+
 $shopping_result = mysqli_query($conn, $shopping_query);
 
-// Get shopping list stats - Updated queries
+if (!$shopping_result) {
+    die("Query failed: " . mysqli_error($conn));
+}
+
+// Get shopping list stats
 $stats = [
     'total_items' => 0,
     'pending_items' => 0,
@@ -31,7 +47,7 @@ $stats = [
     'purchased_items' => 0
 ];
 
-$pending_query = "SELECT COUNT(*) as count, SUM(sl.quantity_needed) as total_qty
+$pending_query = "SELECT COUNT(*) as count 
                   FROM shopping_lists sl
                   JOIN meal_plans mp ON sl.mealplan_id = mp.mealplan_id
                   WHERE mp.user_id = $user_id AND sl.status = 'Pending'";
@@ -67,7 +83,7 @@ $stats['total_items'] = $stats['pending_items'] + $stats['purchased_items'];
 
 // Handle mark as purchased
 if (isset($_POST['mark_purchased'])) {
-    $item_id = $_POST['item_id'];
+    $item_id = intval($_POST['item_id']);
     $update_query = "UPDATE shopping_lists SET status = 'Purchased', purchased_at = NOW() 
                      WHERE shoppinglist_id = $item_id";
     mysqli_query($conn, $update_query);
@@ -77,7 +93,7 @@ if (isset($_POST['mark_purchased'])) {
 
 // Handle delete item
 if (isset($_POST['delete_item'])) {
-    $item_id = $_POST['item_id'];
+    $item_id = intval($_POST['item_id']);
     $delete_query = "DELETE FROM shopping_lists WHERE shoppinglist_id = $item_id";
     mysqli_query($conn, $delete_query);
     header("Location: shopping-list.php");
@@ -644,6 +660,13 @@ if (isset($_POST['clear_purchased'])) {
                 </div>
             </div>
             
+            <!-- Success Message -->
+            <?php if (isset($_GET['saved'])): ?>
+                <div style="background: #d4edda; color: #155724; padding: 15px; border-radius: 10px; margin-bottom: 20px; border-left: 4px solid #28a745;">
+                    <i class="fas fa-check-circle"></i> Meal plan saved successfully! Shopping list updated.
+                </div>
+            <?php endif; ?>
+            
             <!-- Stats Cards -->
             <div class="stats-grid">
                 <div class="stat-card">
@@ -683,11 +706,13 @@ if (isset($_POST['clear_purchased'])) {
             <div class="content-section">
                 <div class="section-header">
                     <h2>Shopping Items</h2>
+                    <?php if ($stats['purchased_items'] > 0): ?>
                     <form method="POST" action="" class="action-form" onsubmit="return confirm('Clear all purchased items?')">
                         <button type="submit" name="clear_purchased" class="btn btn-warning">
                             <i class="fas fa-trash"></i> Clear Purchased
                         </button>
                     </form>
+                    <?php endif; ?>
                 </div>
                 
                 <?php if (mysqli_num_rows($shopping_result) > 0): ?>
@@ -697,6 +722,9 @@ if (isset($_POST['clear_purchased'])) {
                     $items_by_category = [];
                     while ($item = mysqli_fetch_assoc($shopping_result)) {
                         $category = $item['category'] ?? 'Other';
+                        if (!isset($items_by_category[$category])) {
+                            $items_by_category[$category] = [];
+                        }
                         $items_by_category[$category][] = $item;
                     }
                     
@@ -704,19 +732,26 @@ if (isset($_POST['clear_purchased'])) {
                         $category_icon = '';
                         switch(strtolower($category)) {
                             case 'vegetables':
+                                $category_icon = 'fas fa-carrot'; 
+                                break;
                             case 'fruits':
-                                $category_icon = 'fas fa-carrot'; break;
+                                $category_icon = 'fas fa-apple-alt'; 
+                                break;
                             case 'meat':
                             case 'protein':
-                                $category_icon = 'fas fa-drumstick-bite'; break;
+                                $category_icon = 'fas fa-drumstick-bite'; 
+                                break;
                             case 'grains':
                             case 'cereals':
-                                $category_icon = 'fas fa-wheat-awn'; break;
+                                $category_icon = 'fas fa-wheat-awn'; 
+                                break;
                             case 'dairy':
-                                $category_icon = 'fas fa-cheese'; break;
+                                $category_icon = 'fas fa-cheese'; 
+                                break;
                             case 'spices':
                             case 'seasonings':
-                                $category_icon = 'fas fa-mortar-pestle'; break;
+                                $category_icon = 'fas fa-mortar-pestle'; 
+                                break;
                             default:
                                 $category_icon = 'fas fa-shopping-basket';
                         }
@@ -734,13 +769,10 @@ if (isset($_POST['clear_purchased'])) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <?php foreach ($category_items as $item): 
-                                        // Debug output (remove in production)
-                                        // echo "<!-- Debug: " . print_r($item, true) . " -->";
-                                    ?>
+                                    <?php foreach ($category_items as $item): ?>
                                         <tr class="<?php echo $item['status'] == 'Purchased' ? 'purchased' : ''; ?>">
                                             <td>
-                                                <div class="item-name"><?php echo htmlspecialchars($item['item_name'] ?? 'Custom Item'); ?></div>
+                                                <div class="item-name"><?php echo htmlspecialchars($item['item_name']); ?></div>
                                                 <div class="item-category"><?php echo htmlspecialchars($category); ?></div>
                                             </td>
                                             <td>
@@ -749,7 +781,7 @@ if (isset($_POST['clear_purchased'])) {
                                                 </span>
                                             </td>
                                             <td>
-                                                <div class="item-plan"><?php echo htmlspecialchars($item['plan_name'] ?? 'Generated Plan'); ?></div>
+                                                <div class="item-plan"><?php echo htmlspecialchars($item['plan_name']); ?></div>
                                             </td>
                                             <td>
                                                 <span class="status-badge status-<?php echo strtolower($item['status']); ?>">
@@ -788,6 +820,12 @@ if (isset($_POST['clear_purchased'])) {
                         <a href="create-plan.php" class="btn btn-primary">
                             <i class="fas fa-magic"></i> Generate Meal Plan
                         </a>
+                        <?php if ($stats['purchased_items'] > 0): ?>
+                        <p style="margin-top: 20px; color: var(--text-light);">
+                            You have <?php echo $stats['purchased_items']; ?> purchased items. 
+                            <a href="#" onclick="document.querySelector('[name=clear_purchased]').click(); return false;" style="color: var(--accent-red);">Clear them</a>.
+                        </p>
+                        <?php endif; ?>
                     </div>
                 <?php endif; ?>
             </div>
@@ -856,11 +894,6 @@ if (isset($_POST['clear_purchased'])) {
                 markAllPurchased();
             }
         });
-        
-        // Auto-refresh every 30 seconds
-        setTimeout(function() {
-            // location.reload();
-        }, 30000);
     </script>
 </body>
 </html>

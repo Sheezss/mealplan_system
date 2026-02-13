@@ -25,7 +25,12 @@ if (!$nutrition_goals) {
         'daily_protein' => 50.00,
         'daily_carbs' => 250.00,
         'daily_fats' => 65.00,
-        'goal_type' => 'Maintenance'
+        'goal_type' => 'Maintenance',
+        'active_level' => 'Moderate',
+        'weight_kg' => null,
+        'height_cm' => null,
+        'age' => null,
+        'gender' => 'Other'
     ];
 }
 
@@ -89,25 +94,32 @@ while ($plan = mysqli_fetch_assoc($mealplans_result)) {
     $total_cost += $plan['total_cost'];
 }
 
-// Calculate averages if we have data
+// Calculate averages if we have data - FIXED DIVISION BY ZERO
 $avg_calories = $total_mealplans > 0 ? $total_calories / $total_mealplans : 0;
 $avg_protein = $total_mealplans > 0 ? $total_protein / $total_mealplans : 0;
 $avg_carbs = $total_mealplans > 0 ? $total_carbs / $total_mealplans : 0;
 $avg_fats = $total_mealplans > 0 ? $total_fats / $total_mealplans : 0;
 
-// Calculate percentages of goals
-$calories_percent = $nutrition_goals['daily_calories'] > 0 ? 
-    min(100, ($total_calories / ($nutrition_goals['daily_calories'] * $total_mealplans)) * 100) : 0;
-$protein_percent = $nutrition_goals['daily_protein'] > 0 ? 
-    min(100, ($total_protein / ($nutrition_goals['daily_protein'] * $total_mealplans)) * 100) : 0;
-$carbs_percent = $nutrition_goals['daily_carbs'] > 0 ? 
-    min(100, ($total_carbs / ($nutrition_goals['daily_carbs'] * $total_mealplans)) * 100) : 0;
-$fats_percent = $nutrition_goals['daily_fats'] > 0 ? 
-    min(100, ($total_fats / ($nutrition_goals['daily_fats'] * $total_mealplans)) * 100) : 0;
+// Calculate percentages of goals - FIXED DIVISION BY ZERO
+$calories_percent = 0;
+$protein_percent = 0;
+$carbs_percent = 0;
+$fats_percent = 0;
+
+if ($total_mealplans > 0) {
+    $calories_percent = $nutrition_goals['daily_calories'] > 0 ? 
+        min(100, ($total_calories / ($nutrition_goals['daily_calories'] * $total_mealplans)) * 100) : 0;
+    $protein_percent = $nutrition_goals['daily_protein'] > 0 ? 
+        min(100, ($total_protein / ($nutrition_goals['daily_protein'] * $total_mealplans)) * 100) : 0;
+    $carbs_percent = $nutrition_goals['daily_carbs'] > 0 ? 
+        min(100, ($total_carbs / ($nutrition_goals['daily_carbs'] * $total_mealplans)) * 100) : 0;
+    $fats_percent = $nutrition_goals['daily_fats'] > 0 ? 
+        min(100, ($total_fats / ($nutrition_goals['daily_fats'] * $total_mealplans)) * 100) : 0;
+}
 
 // Get nutritional insights
 $insights = [];
-if ($total_calories > 0) {
+if ($total_mealplans > 0 && $total_calories > 0) {
     if ($calories_percent < 70) {
         $insights[] = "You're consuming fewer calories than recommended. Consider adding more nutrient-dense foods.";
     } elseif ($calories_percent > 130) {
@@ -127,20 +139,22 @@ if ($total_calories > 0) {
     if ($fats_percent > 130) {
         $insights[] = "Monitor your fat intake. Choose healthier fats like avocados and nuts.";
     }
+} else {
+    $insights[] = "No meal plan data available for the selected period. Create a meal plan to see your nutrition summary!";
 }
 
 // Handle goal update
-if (isset($_POST['update_goals'])) {
-    $daily_calories = intval($_POST['daily_calories']);
-    $daily_protein = floatval($_POST['daily_protein']);
-    $daily_carbs = floatval($_POST['daily_carbs']);
-    $daily_fats = floatval($_POST['daily_fats']);
-    $goal_type = mysqli_real_escape_string($conn, $_POST['goal_type']);
-    $active_level = mysqli_real_escape_string($conn, $_POST['active_level']);
-    $weight = floatval($_POST['weight']);
-    $height = intval($_POST['height']);
-    $age = intval($_POST['age']);
-    $gender = mysqli_real_escape_string($conn, $_POST['gender']);
+if (isset($_POST['update_goals']) || isset($_POST['calculate_tdee'])) {
+    $daily_calories = intval($_POST['daily_calories'] ?? 2000);
+    $daily_protein = floatval($_POST['daily_protein'] ?? 50);
+    $daily_carbs = floatval($_POST['daily_carbs'] ?? 250);
+    $daily_fats = floatval($_POST['daily_fats'] ?? 65);
+    $goal_type = mysqli_real_escape_string($conn, $_POST['goal_type'] ?? 'Maintenance');
+    $active_level = mysqli_real_escape_string($conn, $_POST['active_level'] ?? 'Moderate');
+    $weight = floatval($_POST['weight'] ?? 0);
+    $height = intval($_POST['height'] ?? 0);
+    $age = intval($_POST['age'] ?? 0);
+    $gender = mysqli_real_escape_string($conn, $_POST['gender'] ?? 'Other');
     
     // Auto-calculate goals if using TDEE calculator
     if (isset($_POST['calculate_tdee'])) {
@@ -170,7 +184,7 @@ if (isset($_POST['update_goals'])) {
             switch ($goal_type) {
                 case 'Weight Loss':
                     $daily_calories = round($tdee * 0.8);
-                    $daily_protein = round($weight * 2.2, 1); // grams per kg body weight
+                    $daily_protein = round($weight * 2.2, 1);
                     break;
                 case 'Muscle Gain':
                     $daily_calories = round($tdee * 1.1);
@@ -186,24 +200,38 @@ if (isset($_POST['update_goals'])) {
             // Calculate carbs and fats (40% carbs, 30% fats)
             $carbs_calories = $daily_calories * 0.4;
             $fats_calories = $daily_calories * 0.3;
-            $daily_carbs = round($carbs_calories / 4, 1); // 4 calories per gram
-            $daily_fats = round($fats_calories / 9, 1); // 9 calories per gram
+            $daily_carbs = round($carbs_calories / 4, 1);
+            $daily_fats = round($fats_calories / 9, 1);
         }
     }
     
-    $update_sql = "UPDATE nutrition_goals SET 
-                   daily_calories = $daily_calories,
-                   daily_protein = $daily_protein,
-                   daily_carbs = $daily_carbs,
-                   daily_fats = $daily_fats,
-                   goal_type = '$goal_type',
-                   active_level = '$active_level',
-                   weight_kg = $weight,
-                   height_cm = $height,
-                   age = $age,
-                   gender = '$gender',
-                   updated_at = NOW()
-                   WHERE user_id = $user_id";
+    // Check if goals exist
+    $check_goals = "SELECT * FROM nutrition_goals WHERE user_id = $user_id";
+    $check_result = mysqli_query($conn, $check_goals);
+    
+    if (mysqli_num_rows($check_result) > 0) {
+        // Update existing goals
+        $update_sql = "UPDATE nutrition_goals SET 
+                       daily_calories = $daily_calories,
+                       daily_protein = $daily_protein,
+                       daily_carbs = $daily_carbs,
+                       daily_fats = $daily_fats,
+                       goal_type = '$goal_type',
+                       active_level = '$active_level',
+                       weight_kg = " . ($weight > 0 ? $weight : "NULL") . ",
+                       height_cm = " . ($height > 0 ? $height : "NULL") . ",
+                       age = " . ($age > 0 ? $age : "NULL") . ",
+                       gender = '$gender',
+                       updated_at = NOW()
+                       WHERE user_id = $user_id";
+    } else {
+        // Insert new goals
+        $update_sql = "INSERT INTO nutrition_goals 
+                       (user_id, daily_calories, daily_protein, daily_carbs, daily_fats, goal_type, active_level, weight_kg, height_cm, age, gender, updated_at) 
+                       VALUES 
+                       ($user_id, $daily_calories, $daily_protein, $daily_carbs, $daily_fats, '$goal_type', '$active_level', " . 
+                       ($weight > 0 ? $weight : "NULL") . ", " . ($height > 0 ? $height : "NULL") . ", " . ($age > 0 ? $age : "NULL") . ", '$gender', NOW())";
+    }
     
     if (mysqli_query($conn, $update_sql)) {
         $success_message = "Nutrition goals updated successfully!";
@@ -256,7 +284,7 @@ if (isset($_POST['update_goals'])) {
             min-height: 100vh;
         }
         
-        /* Sidebar styles (same as dashboard) */
+        /* Sidebar styles */
         .sidebar {
             width: 250px;
             background: linear-gradient(180deg, var(--dark-green), var(--primary-green));
@@ -400,6 +428,7 @@ if (isset($_POST['update_goals'])) {
             padding: 15px;
             border-radius: 10px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            flex-wrap: wrap;
         }
         
         .period-btn {
@@ -410,6 +439,8 @@ if (isset($_POST['update_goals'])) {
             cursor: pointer;
             font-weight: 500;
             transition: all 0.3s;
+            text-decoration: none;
+            color: var(--text-dark);
         }
         
         .period-btn.active {
@@ -723,6 +754,31 @@ if (isset($_POST['update_goals'])) {
                 flex-direction: column;
                 align-items: flex-start;
             }
+            
+            .period-selector {
+                flex-direction: column;
+            }
+            
+            .period-btn {
+                text-align: center;
+            }
+        }
+        
+        @media print {
+            .sidebar, .top-header .btn, .period-selector, .btn, .modal {
+                display: none !important;
+            }
+            
+            .main-content {
+                margin-left: 0 !important;
+                padding: 20px !important;
+            }
+            
+            .content-section {
+                box-shadow: none !important;
+                border: 1px solid #ddd !important;
+                page-break-inside: avoid;
+            }
         }
     </style>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -730,7 +786,7 @@ if (isset($_POST['update_goals'])) {
 </head>
 <body>
     <div class="dashboard-container">
-        <!-- Sidebar (same as your dashboard) -->
+        <!-- Sidebar -->
         <aside class="sidebar">
             <div class="logo">
                 <div class="logo-icon">
@@ -745,7 +801,7 @@ if (isset($_POST['update_goals'])) {
             <ul class="nav-menu">
                 <li><a href="dashboard.php"><i class="fas fa-home"></i> Dashboard</a></li>
                 <li><a href="pantry.php"><i class="fas fa-archive"></i> My Pantry</a></li>
-                <li><a href="meal-plans.php"><i class="fas fa-calendar-alt"></i> Meal Plans</a></li>
+                <li><a href="meal_plan.php"><i class="fas fa-calendar-alt"></i> Meal Plans</a></li>
                 <li><a href="nutrition-summary.php" class="active"><i class="fas fa-chart-pie"></i> Nutrition Summary</a></li>
                 <li><a href="shopping-list.php"><i class="fas fa-shopping-cart"></i> Shopping List</a></li>
                 <li><a href="budget.php"><i class="fas fa-wallet"></i> Budget</a></li>
@@ -806,9 +862,15 @@ if (isset($_POST['update_goals'])) {
             <div class="content-section">
                 <div class="section-header">
                     <h2><i class="fas fa-chart-line"></i> Nutrition Overview</h2>
-                    <span>Period: <?php echo ucfirst($period); ?> (<?php echo date('M d', strtotime($start_date)); ?> - <?php echo date('M d, Y', strtotime($end_date)); ?>)</span>
+                    <span>Period: <?php 
+                        if ($period == 'today') echo 'Today';
+                        elseif ($period == 'week') echo 'Last 7 Days';
+                        elseif ($period == 'month') echo 'Last 30 Days';
+                        else echo 'All Time';
+                    ?> (<?php echo date('M d', strtotime($start_date)); ?> - <?php echo date('M d, Y', strtotime($end_date)); ?>)</span>
                 </div>
                 
+                <?php if ($total_mealplans > 0): ?>
                 <!-- Stats Grid -->
                 <div class="stats-grid">
                     <div class="stat-card">
@@ -904,6 +966,16 @@ if (isset($_POST['update_goals'])) {
                         </div>
                     </div>
                 </div>
+                <?php else: ?>
+                    <div style="text-align: center; padding: 40px; color: var(--text-light);">
+                        <i class="fas fa-chart-pie" style="font-size: 48px; margin-bottom: 20px; display: block; color: var(--border-color);"></i>
+                        <h3 style="color: var(--text-dark); margin-bottom: 10px;">No Data Available</h3>
+                        <p style="margin-bottom: 20px;">You haven't created any meal plans for this period.</p>
+                        <a href="create-plan.php" class="btn btn-primary">
+                            <i class="fas fa-magic"></i> Generate Meal Plan
+                        </a>
+                    </div>
+                <?php endif; ?>
             </div>
             
             <!-- Nutritional Insights -->
@@ -935,48 +1007,39 @@ if (isset($_POST['update_goals'])) {
             <div class="content-section">
                 <div class="section-header">
                     <h2><i class="fas fa-list"></i> Meal Plan Details</h2>
-                    <span>Showing <?php echo count($mealplan_data); ?> meal plans</span>
+                    <span>Showing <?php echo count($mealplan_data); ?> meal plan<?php echo count($mealplan_data) > 1 ? 's' : ''; ?></span>
                 </div>
                 
-                <table class="nutrition-table">
-                    <thead>
-                        <tr>
-                            <th>Plan Name</th>
-                            <th>Date</th>
-                            <th>Meals</th>
-                            <th>Calories</th>
-                            <th>Protein</th>
-                            <th>Carbs</th>
-                            <th>Fats</th>
-                            <th>Cost</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($mealplan_data as $plan): ?>
+                <div style="overflow-x: auto;">
+                    <table class="nutrition-table">
+                        <thead>
                             <tr>
-                                <td><strong><?php echo htmlspecialchars($plan['name']); ?></strong></td>
-                                <td><?php echo date('M d, Y', strtotime($plan['created_at'])); ?></td>
-                                <td><?php echo $plan['total_meals']; ?></td>
-                                <td><?php echo number_format($plan['total_calories']); ?></td>
-                                <td><?php echo number_format($plan['total_protein'], 1); ?>g</td>
-                                <td><?php echo number_format($plan['total_carbs'], 1); ?>g</td>
-                                <td><?php echo number_format($plan['total_fats'], 1); ?>g</td>
-                                <td>KES <?php echo number_format($plan['total_cost']); ?></td>
+                                <th>Plan Name</th>
+                                <th>Date</th>
+                                <th>Meals</th>
+                                <th>Calories</th>
+                                <th>Protein</th>
+                                <th>Carbs</th>
+                                <th>Fats</th>
+                                <th>Cost</th>
                             </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-            <?php else: ?>
-            <div class="content-section">
-                <div class="section-header">
-                    <h2><i class="fas fa-info-circle"></i> No Data Available</h2>
+                        </thead>
+                        <tbody>
+                            <?php foreach ($mealplan_data as $plan): ?>
+                                <tr>
+                                    <td><strong><?php echo htmlspecialchars($plan['name']); ?></strong></td>
+                                    <td><?php echo date('M d, Y', strtotime($plan['created_at'])); ?></td>
+                                    <td><?php echo $plan['total_meals']; ?></td>
+                                    <td><?php echo number_format($plan['total_calories']); ?></td>
+                                    <td><?php echo number_format($plan['total_protein'], 1); ?>g</td>
+                                    <td><?php echo number_format($plan['total_carbs'], 1); ?>g</td>
+                                    <td><?php echo number_format($plan['total_fats'], 1); ?>g</td>
+                                    <td>KES <?php echo number_format($plan['total_cost']); ?></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
                 </div>
-                <p style="text-align: center; padding: 40px; color: var(--text-light);">
-                    <i class="fas fa-chart-pie" style="font-size: 48px; margin-bottom: 20px; display: block;"></i>
-                    You haven't created any meal plans yet. <br>
-                    <a href="meal-plans.php" style="color: var(--primary-green); font-weight: 600;">Create your first meal plan</a> to start tracking your nutrition!
-                </p>
             </div>
             <?php endif; ?>
             
@@ -1102,71 +1165,69 @@ if (isset($_POST['update_goals'])) {
             }
         }
         
-        // Nutrition chart (optional enhancement)
+        // Nutrition chart (only create if there's data)
         document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.createElement('canvas');
-            ctx.id = 'nutritionChart';
-            document.querySelector('.content-section').appendChild(ctx);
-            
-            const nutritionChart = new Chart(ctx, {
-                type: 'bar',
-                data: {
-                    labels: ['Calories', 'Protein', 'Carbs', 'Fats'],
-                    datasets: [{
-                        label: 'Your Intake',
-                        data: [<?php echo $total_calories; ?>, <?php echo $total_protein; ?>, <?php echo $total_carbs; ?>, <?php echo $total_fats; ?>],
-                        backgroundColor: [
-                            'rgba(231, 76, 60, 0.7)',
-                            'rgba(52, 152, 219, 0.7)',
-                            'rgba(243, 156, 18, 0.7)',
-                            'rgba(155, 89, 182, 0.7)'
-                        ],
-                        borderColor: [
-                            '#e74c3c',
-                            '#3498db',
-                            '#f39c12',
-                            '#9b59b6'
-                        ],
-                        borderWidth: 1
-                    }]
-                },
-                options: {
-                    responsive: true,
-                    plugins: {
-                        legend: {
-                            display: false
-                        },
-                        title: {
-                            display: true,
-                            text: 'Nutrition Breakdown'
-                        }
+            <?php if ($total_mealplans > 0 && $total_calories > 0): ?>
+            const chartContainer = document.querySelector('.content-section');
+            if (chartContainer && !document.getElementById('nutritionChart')) {
+                const canvas = document.createElement('canvas');
+                canvas.id = 'nutritionChart';
+                canvas.style.marginTop = '30px';
+                canvas.style.maxHeight = '300px';
+                
+                // Find the progress section or append to container
+                const progressSection = document.querySelector('[style*="margin-top: 30px;"]');
+                if (progressSection) {
+                    progressSection.appendChild(canvas);
+                } else {
+                    chartContainer.appendChild(canvas);
+                }
+                
+                const ctx = canvas.getContext('2d');
+                const nutritionChart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: ['Calories', 'Protein', 'Carbs', 'Fats'],
+                        datasets: [{
+                            label: 'Your Intake',
+                            data: [<?php echo $total_calories; ?>, <?php echo $total_protein; ?>, <?php echo $total_carbs; ?>, <?php echo $total_fats; ?>],
+                            backgroundColor: [
+                                'rgba(231, 76, 60, 0.7)',
+                                'rgba(52, 152, 219, 0.7)',
+                                'rgba(243, 156, 18, 0.7)',
+                                'rgba(155, 89, 182, 0.7)'
+                            ],
+                            borderColor: [
+                                '#e74c3c',
+                                '#3498db',
+                                '#f39c12',
+                                '#9b59b6'
+                            ],
+                            borderWidth: 1
+                        }]
                     },
-                    scales: {
-                        y: {
-                            beginAtZero: true
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: false
+                            },
+                            title: {
+                                display: true,
+                                text: 'Nutrition Breakdown'
+                            }
+                        },
+                        scales: {
+                            y: {
+                                beginAtZero: true
+                            }
                         }
                     }
-                }
-            });
+                });
+            }
+            <?php endif; ?>
         });
-        
-        // Print styles
-        @media print {
-            .sidebar, .top-header, .period-selector, .btn {
-                display: none !important;
-            }
-            
-            .main-content {
-                margin-left: 0 !important;
-                padding: 20px !important;
-            }
-            
-            .content-section {
-                box-shadow: none !important;
-                border: 1px solid #ddd !important;
-                page-break-inside: avoid;
-            }
-        }
     </script>
 </body>
 </html>

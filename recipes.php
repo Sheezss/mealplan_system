@@ -10,6 +10,95 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = $_SESSION['user_id'];
 $user_name = $_SESSION['full_name'];
 
+// Get recipe details if viewing single recipe
+$view_recipe = null;
+if (isset($_GET['view'])) {
+    $recipe_id = intval($_GET['view']);
+    $view_query = "SELECT * FROM recipes WHERE recipe_id = $recipe_id";
+    $view_result = mysqli_query($conn, $view_query);
+    if ($view_result && mysqli_num_rows($view_result) > 0) {
+        $view_recipe = mysqli_fetch_assoc($view_result);
+        
+        // Get ingredients for this recipe
+        $ing_query = "SELECT ri.*, fi.name as ingredient_name, fi.category, fi.unit as food_unit 
+                      FROM recipe_ingredients ri 
+                      JOIN food_items fi ON ri.fooditem_id = fi.fooditem_id 
+                      WHERE ri.recipe_id = $recipe_id";
+        $ing_result = mysqli_query($conn, $ing_query);
+        $ingredients = [];
+        while ($ing = mysqli_fetch_assoc($ing_result)) {
+            $ingredients[] = $ing;
+        }
+        $view_recipe['ingredients'] = $ingredients;
+    }
+}
+
+// Handle adding recipe to plan
+if (isset($_POST['add_to_plan'])) {
+    $recipe_id = intval($_POST['recipe_id']);
+    $meal_type = mysqli_real_escape_string($conn, $_POST['meal_type']);
+    $scheduled_date = mysqli_real_escape_string($conn, $_POST['scheduled_date']);
+    
+    // Check if user has an active meal plan for this week
+    $plan_check = "SELECT mealplan_id FROM meal_plans 
+                   WHERE user_id = $user_id 
+                   AND start_date <= '$scheduled_date' 
+                   AND end_date >= '$scheduled_date' 
+                   LIMIT 1";
+    $plan_result = mysqli_query($conn, $plan_check);
+    
+    if (mysqli_num_rows($plan_result) > 0) {
+        // Add to existing plan
+        $plan_row = mysqli_fetch_assoc($plan_result);
+        $plan_id = $plan_row['mealplan_id'];
+        
+        // Get recipe details
+        $recipe_query = "SELECT * FROM recipes WHERE recipe_id = $recipe_id";
+        $recipe_result = mysqli_query($conn, $recipe_query);
+        $recipe = mysqli_fetch_assoc($recipe_result);
+        
+        // Add meal to meals table
+        $meal_sql = "INSERT INTO meals (mealplan_id, recipe_id, meal_name, meal_type, scheduled_date) 
+                     VALUES ($plan_id, $recipe_id, '{$recipe['recipe_name']}', '$meal_type', '$scheduled_date')";
+        
+        if (mysqli_query($conn, $meal_sql)) {
+            $success_message = "Recipe added to your meal plan successfully!";
+            
+            // Add ingredients to shopping list if needed
+            $ing_query = "SELECT ri.*, fi.name as ingredient_name 
+                          FROM recipe_ingredients ri 
+                          JOIN food_items fi ON ri.fooditem_id = fi.fooditem_id 
+                          WHERE ri.recipe_id = $recipe_id";
+            $ing_result = mysqli_query($conn, $ing_query);
+            
+            while ($ing = mysqli_fetch_assoc($ing_result)) {
+                // Check if item already in shopping list
+                $check_sql = "SELECT * FROM shopping_lists 
+                              WHERE mealplan_id = $plan_id 
+                              AND fooditem_id = {$ing['fooditem_id']} 
+                              AND status = 'Pending'";
+                $check_result = mysqli_query($conn, $check_sql);
+                
+                if (mysqli_num_rows($check_result) == 0) {
+                    $shop_sql = "INSERT INTO shopping_lists (mealplan_id, fooditem_id, quantity_needed, unit, status) 
+                                 VALUES ($plan_id, {$ing['fooditem_id']}, {$ing['quantity']}, '{$ing['unit']}', 'Pending')";
+                    mysqli_query($conn, $shop_sql);
+                }
+            }
+            
+            // Track activity
+            mysqli_query($conn, "INSERT INTO user_activity (user_id, activity_type, activity_details) 
+                                 VALUES ($user_id, 'recipe_added', 'Added {$recipe['recipe_name']} to meal plan')");
+        } else {
+            $error_message = "Error adding recipe: " . mysqli_error($conn);
+        }
+    } else {
+        // No active plan - redirect to create one
+        header("Location: create-plan.php?add_recipe=$recipe_id&date=$scheduled_date&type=$meal_type");
+        exit();
+    }
+}
+
 // Get all Kenyan recipes from database
 $recipes_query = "SELECT * FROM recipes ORDER BY meal_type, recipe_name";
 $recipes_result = mysqli_query($conn, $recipes_query);
@@ -38,6 +127,14 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
     $recipes_result = mysqli_query($conn, $recipes_query);
     $category_filter = $category;
 }
+
+// Get user's upcoming meal plans for dropdown
+$plans_query = "SELECT mealplan_id, name, start_date, end_date 
+                FROM meal_plans 
+                WHERE user_id = $user_id 
+                AND end_date >= CURDATE()
+                ORDER BY start_date ASC";
+$plans_result = mysqli_query($conn, $plans_query);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -59,6 +156,7 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
             --text-dark: #2c3e50;
             --text-light: #7f8c8d;
             --border-color: #e1f5e1;
+            --modal-overlay: rgba(0,0,0,0.5);
         }
         
         * {
@@ -328,6 +426,8 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
             cursor: pointer;
             transition: all 0.3s;
             font-size: 14px;
+            text-decoration: none;
+            display: inline-block;
         }
         
         .category-btn:hover {
@@ -355,6 +455,7 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             box-shadow: 0 3px 10px rgba(0,0,0,0.05);
+            cursor: pointer;
         }
         
         .recipe-card:hover {
@@ -405,6 +506,10 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
             font-size: 14px;
             margin-bottom: 15px;
             line-height: 1.5;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
         }
         
         .recipe-details {
@@ -512,6 +617,206 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
         .dinner-icon { background: linear-gradient(135deg, #9b59b6, #8e44ad); }
         .snack-icon { background: linear-gradient(135deg, #e74c3c, #c0392b); }
         
+        /* Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: var(--modal-overlay);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal-content {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            position: relative;
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .modal-header h2 {
+            color: var(--dark-green);
+            font-size: 24px;
+        }
+        
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 28px;
+            cursor: pointer;
+            color: var(--text-light);
+        }
+        
+        .close-modal:hover {
+            color: var(--accent-red);
+        }
+        
+        .recipe-detail-image {
+            width: 100%;
+            height: 200px;
+            background: linear-gradient(135deg, var(--light-green), #e8f8f1);
+            border-radius: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 25px;
+        }
+        
+        .recipe-detail-image i {
+            font-size: 80px;
+            color: var(--primary-green);
+        }
+        
+        .recipe-meta {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+            padding: 20px;
+            background: var(--light-bg);
+            border-radius: 15px;
+        }
+        
+        .meta-item {
+            text-align: center;
+        }
+        
+        .meta-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: var(--primary-green);
+        }
+        
+        .meta-label {
+            color: var(--text-light);
+            font-size: 14px;
+        }
+        
+        .ingredients-list {
+            margin-bottom: 30px;
+        }
+        
+        .ingredients-list h3 {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+        }
+        
+        .ingredients-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+        }
+        
+        .ingredient-item {
+            background: var(--light-bg);
+            padding: 12px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .ingredient-name {
+            font-weight: 500;
+        }
+        
+        .ingredient-quantity {
+            color: var(--primary-green);
+            font-weight: 600;
+        }
+        
+        .instructions {
+            margin-bottom: 30px;
+        }
+        
+        .instructions h3 {
+            color: var(--dark-green);
+            margin-bottom: 15px;
+        }
+        
+        .instructions-content {
+            background: var(--light-bg);
+            padding: 20px;
+            border-radius: 10px;
+            white-space: pre-line;
+        }
+        
+        .add-to-plan-form {
+            background: var(--light-green);
+            padding: 25px;
+            border-radius: 15px;
+            margin-top: 20px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: var(--text-dark);
+        }
+        
+        .form-control {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary-green);
+            box-shadow: 0 0 0 3px rgba(39, 174, 96, 0.1);
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        /* Alert Messages */
+        .alert {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            border-left: 4px solid;
+        }
+        
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left-color: #28a745;
+        }
+        
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left-color: #dc3545;
+        }
+        
         @media (max-width: 768px) {
             .sidebar {
                 width: 100%;
@@ -544,6 +849,14 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
             
             .search-box {
                 min-width: 100%;
+            }
+            
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+            
+            .modal-content {
+                padding: 20px;
             }
         }
     </style>
@@ -599,6 +912,20 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
                     </a>
                 </div>
             </div>
+            
+            <?php if (isset($success_message)): ?>
+                <div class="alert alert-success">
+                    <i class="fas fa-check-circle"></i>
+                    <?php echo htmlspecialchars($success_message); ?>
+                </div>
+            <?php endif; ?>
+            
+            <?php if (isset($error_message)): ?>
+                <div class="alert alert-error">
+                    <i class="fas fa-exclamation-circle"></i>
+                    <?php echo htmlspecialchars($error_message); ?>
+                </div>
+            <?php endif; ?>
             
             <!-- Search and Filter -->
             <div class="content-section">
@@ -659,7 +986,7 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
                                 <h3><i class="<?php echo $category_icon; ?>"></i> <?php echo htmlspecialchars($category); ?> Recipes</h3>
                                 <div class="recipes-grid">
                                     <?php foreach ($category_recipes as $recipe): ?>
-                                        <div class="recipe-card">
+                                        <div class="recipe-card" onclick="viewRecipe(<?php echo $recipe['recipe_id']; ?>)">
                                             <div class="recipe-image">
                                                 <div class="recipe-icon <?php echo $icon_class; ?>">
                                                     <i class="<?php echo $category_icon; ?>"></i>
@@ -679,24 +1006,24 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
                                                     <div class="recipe-nutrition">
                                                         <div class="nutrition-item">
                                                             <span class="nutrition-value"><?php echo $recipe['calories'] ?? '300'; ?></span>
-                                                            <span class="nutrition-label">Calories</span>
+                                                            <span class="nutrition-label">Cal</span>
                                                         </div>
                                                         <div class="nutrition-item">
-                                                            <span class="nutrition-value"><?php echo $recipe['estimated_cost']; ?></span>
-                                                            <span class="nutrition-label">KES</span>
+                                                            <span class="nutrition-value">KES <?php echo $recipe['estimated_cost']; ?></span>
+                                                            <span class="nutrition-label">Cost</span>
                                                         </div>
                                                         <div class="nutrition-item">
                                                             <span class="nutrition-value"><?php echo $recipe['prep_time'] ?? '30'; ?></span>
-                                                            <span class="nutrition-label">Mins</span>
+                                                            <span class="nutrition-label">Min</span>
                                                         </div>
                                                     </div>
                                                 </div>
                                                 
-                                                <div class="recipe-actions">
+                                                <div class="recipe-actions" onclick="event.stopPropagation()">
                                                     <button class="btn btn-sm btn-outline" onclick="viewRecipe(<?php echo $recipe['recipe_id']; ?>)">
                                                         <i class="fas fa-eye"></i> View
                                                     </button>
-                                                    <button class="btn btn-sm btn-primary" onclick="addToPlan(<?php echo $recipe['recipe_id']; ?>)">
+                                                    <button class="btn btn-sm btn-primary" onclick="addToPlanModal(<?php echo $recipe['recipe_id']; ?>, '<?php echo addslashes($recipe['recipe_name']); ?>', '<?php echo $category; ?>')">
                                                         <i class="fas fa-plus"></i> Add to Plan
                                                     </button>
                                                 </div>
@@ -720,7 +1047,7 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
                                     default: $category_icon = 'fas fa-utensils';
                                 }
                             ?>
-                                <div class="recipe-card">
+                                <div class="recipe-card" onclick="window.location.href='recipe-details.php?id=<?php echo $recipe['recipe_id']; ?>'">
                                     <div class="recipe-image">
                                         <div class="recipe-icon <?php echo $icon_class; ?>">
                                             <i class="<?php echo $category_icon; ?>"></i>
@@ -740,24 +1067,24 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
                                             <div class="recipe-nutrition">
                                                 <div class="nutrition-item">
                                                     <span class="nutrition-value"><?php echo $recipe['calories'] ?? '300'; ?></span>
-                                                    <span class="nutrition-label">Calories</span>
+                                                    <span class="nutrition-label">Cal</span>
                                                 </div>
                                                 <div class="nutrition-item">
-                                                    <span class="nutrition-value"><?php echo $recipe['estimated_cost']; ?></span>
-                                                    <span class="nutrition-label">KES</span>
+                                                    <span class="nutrition-value">KES <?php echo $recipe['estimated_cost']; ?></span>
+                                                    <span class="nutrition-label">Cost</span>
                                                 </div>
                                                 <div class="nutrition-item">
                                                     <span class="nutrition-value"><?php echo $recipe['prep_time'] ?? '30'; ?></span>
-                                                    <span class="nutrition-label">Mins</span>
+                                                    <span class="nutrition-label">Min</span>
                                                 </div>
                                             </div>
                                         </div>
                                         
-                                        <div class="recipe-actions">
+                                        <div class="recipe-actions" onclick="event.stopPropagation()">
                                             <button class="btn btn-sm btn-outline" onclick="viewRecipe(<?php echo $recipe['recipe_id']; ?>)">
                                                 <i class="fas fa-eye"></i> View
                                             </button>
-                                            <button class="btn btn-sm btn-primary" onclick="addToPlan(<?php echo $recipe['recipe_id']; ?>)">
+                                            <button class="btn btn-sm btn-primary" onclick="addToPlanModal(<?php echo $recipe['recipe_id']; ?>, '<?php echo addslashes($recipe['recipe_name']); ?>', '<?php echo $recipe['meal_type']; ?>')">
                                                 <i class="fas fa-plus"></i> Add to Plan
                                             </button>
                                         </div>
@@ -810,35 +1137,232 @@ if (isset($_GET['category']) && !empty($_GET['category'])) {
         </main>
     </div>
     
+    <!-- Recipe View Modal -->
+    <div id="recipeModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalRecipeName"></h2>
+                <button class="close-modal" onclick="closeRecipeModal()">&times;</button>
+            </div>
+            <div id="modalRecipeContent">
+                <!-- Content will be loaded dynamically -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Add to Plan Modal -->
+    <div id="addToPlanModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Add Recipe to Meal Plan</h2>
+                <button class="close-modal" onclick="closeAddToPlanModal()">&times;</button>
+            </div>
+            <form method="POST" action="" id="addToPlanForm">
+                <input type="hidden" name="recipe_id" id="plan_recipe_id">
+                
+                <div class="form-group">
+                    <label>Recipe Name</label>
+                    <input type="text" id="plan_recipe_name" class="form-control" readonly>
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="meal_type">Meal Type</label>
+                        <select name="meal_type" id="plan_meal_type" class="form-control" required>
+                            <option value="">Select meal type</option>
+                            <option value="Breakfast">Breakfast</option>
+                            <option value="Lunch">Lunch</option>
+                            <option value="Dinner">Dinner</option>
+                            <option value="Snack">Snack</option>
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="scheduled_date">Date</label>
+                        <input type="date" name="scheduled_date" id="plan_scheduled_date" class="form-control" 
+                               min="<?php echo date('Y-m-d'); ?>" required>
+                    </div>
+                </div>
+                
+                <?php if (mysqli_num_rows($plans_result) > 0): ?>
+                    <div class="form-group">
+                        <label>Or select existing meal plan:</label>
+                        <select name="mealplan_id" class="form-control" onchange="useExistingPlan(this.value)">
+                            <option value="">-- Create new plan --</option>
+                            <?php while ($plan = mysqli_fetch_assoc($plans_result)): ?>
+                                <option value="<?php echo $plan['mealplan_id']; ?>">
+                                    <?php echo htmlspecialchars($plan['name']); ?> 
+                                    (<?php echo date('M d', strtotime($plan['start_date'])); ?> - <?php echo date('M d', strtotime($plan['end_date'])); ?>)
+                                </option>
+                            <?php endwhile; ?>
+                        </select>
+                    </div>
+                <?php endif; ?>
+                
+                <div style="display: flex; gap: 15px; margin-top: 20px;">
+                    <button type="submit" name="add_to_plan" class="btn btn-primary">
+                        <i class="fas fa-plus-circle"></i> Add to Plan
+                    </button>
+                    <button type="button" class="btn btn-outline" onclick="closeAddToPlanModal()">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
     <script>
+        // Recipe viewing function
         function viewRecipe(recipeId) {
-            alert('Viewing recipe ' + recipeId + ' (feature coming soon)');
-            // window.location.href = 'view-recipe.php?id=' + recipeId;
+            // In a real implementation, you would fetch recipe details via AJAX
+            // For now, we'll redirect to a recipe detail page
+            window.location.href = 'recipe-details.php?id=' + recipeId;
+            
+            // Alternative: Show modal with recipe details (if you want to keep on same page)
+            /*
+            fetch('get-recipe.php?id=' + recipeId)
+                .then(response => response.json())
+                .then(data => {
+                    document.getElementById('modalRecipeName').textContent = data.recipe_name;
+                    
+                    let html = `
+                        <div class="recipe-detail-image">
+                            <i class="fas fa-utensils"></i>
+                        </div>
+                        
+                        <div class="recipe-meta">
+                            <div class="meta-item">
+                                <div class="meta-value">${data.calories || '300'}</div>
+                                <div class="meta-label">Calories</div>
+                            </div>
+                            <div class="meta-item">
+                                <div class="meta-value">KES ${data.estimated_cost}</div>
+                                <div class="meta-label">Cost</div>
+                            </div>
+                            <div class="meta-item">
+                                <div class="meta-value">${data.prep_time || '30'} min</div>
+                                <div class="meta-label">Prep Time</div>
+                            </div>
+                        </div>
+                        
+                        <div class="ingredients-list">
+                            <h3>Ingredients</h3>
+                            <div class="ingredients-grid">
+                    `;
+                    
+                    data.ingredients.forEach(ing => {
+                        html += `
+                            <div class="ingredient-item">
+                                <span class="ingredient-name">${ing.ingredient_name}</span>
+                                <span class="ingredient-quantity">${ing.quantity} ${ing.unit}</span>
+                            </div>
+                        `;
+                    });
+                    
+                    html += `
+                            </div>
+                        </div>
+                        
+                        <div class="instructions">
+                            <h3>Instructions</h3>
+                            <div class="instructions-content">${data.instructions || 'No instructions available.'}</div>
+                        </div>
+                        
+                        <div class="add-to-plan-form">
+                            <h3 style="color: var(--dark-green); margin-bottom: 15px;">Add to Your Meal Plan</h3>
+                            <form method="POST" action="">
+                                <input type="hidden" name="recipe_id" value="${recipeId}">
+                                
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Meal Type</label>
+                                        <select name="meal_type" class="form-control" required>
+                                            <option value="${data.meal_type}">${data.meal_type}</option>
+                                            <option value="Breakfast">Breakfast</option>
+                                            <option value="Lunch">Lunch</option>
+                                            <option value="Dinner">Dinner</option>
+                                            <option value="Snack">Snack</option>
+                                        </select>
+                                    </div>
+                                    
+                                    <div class="form-group">
+                                        <label>Date</label>
+                                        <input type="date" name="scheduled_date" class="form-control" 
+                                               min="${new Date().toISOString().split('T')[0]}" required>
+                                    </div>
+                                </div>
+                                
+                                <button type="submit" name="add_to_plan" class="btn btn-primary">
+                                    <i class="fas fa-plus-circle"></i> Add to Plan
+                                </button>
+                            </form>
+                        </div>
+                    `;
+                    
+                    document.getElementById('modalRecipeContent').innerHTML = html;
+                    document.getElementById('recipeModal').style.display = 'flex';
+                });
+            */
         }
         
-        function addToPlan(recipeId) {
-            alert('Adding recipe ' + recipeId + ' to meal plan (feature coming soon)');
-            // window.location.href = 'create-plan.php?add_recipe=' + recipeId;
+        // Add to plan modal functions
+        function addToPlanModal(recipeId, recipeName, mealType) {
+            document.getElementById('plan_recipe_id').value = recipeId;
+            document.getElementById('plan_recipe_name').value = recipeName;
+            document.getElementById('plan_meal_type').value = mealType;
+            
+            // Set default date to tomorrow
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            document.getElementById('plan_scheduled_date').value = tomorrow.toISOString().split('T')[0];
+            
+            document.getElementById('addToPlanModal').style.display = 'flex';
+        }
+        
+        function closeAddToPlanModal() {
+            document.getElementById('addToPlanModal').style.display = 'none';
+        }
+        
+        function closeRecipeModal() {
+            document.getElementById('recipeModal').style.display = 'none';
+        }
+        
+        function useExistingPlan(planId) {
+            if (planId) {
+                // Set the mealplan_id in the form
+                // You could add a hidden input or redirect
+                console.log('Selected plan:', planId);
+            }
+        }
+        
+        // Close modals when clicking outside
+        window.onclick = function(event) {
+            const recipeModal = document.getElementById('recipeModal');
+            const addModal = document.getElementById('addToPlanModal');
+            
+            if (event.target == recipeModal) {
+                closeRecipeModal();
+            }
+            if (event.target == addModal) {
+                closeAddToPlanModal();
+            }
         }
         
         // Quick search
-        document.querySelector('.search-box input').addEventListener('keypress', function(e) {
+        document.querySelector('.search-box input')?.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') {
                 this.closest('form').submit();
             }
         });
         
-        // Recipe card click
+        // Initialize date input with tomorrow's date
         document.addEventListener('DOMContentLoaded', function() {
-            const recipeCards = document.querySelectorAll('.recipe-card');
-            recipeCards.forEach(card => {
-                card.addEventListener('click', function(e) {
-                    if (!e.target.closest('.recipe-actions')) {
-                        const recipeId = this.querySelector('.recipe-actions button').getAttribute('onclick').match(/\d+/)[0];
-                        viewRecipe(recipeId);
-                    }
-                });
-            });
+            const dateInput = document.getElementById('plan_scheduled_date');
+            if (dateInput) {
+                const tomorrow = new Date();
+                tomorrow.setDate(tomorrow.getDate() + 1);
+                dateInput.value = tomorrow.toISOString().split('T')[0];
+            }
         });
     </script>
 </body>
